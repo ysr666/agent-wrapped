@@ -41,6 +41,17 @@ test("normalizes English cache aliases across different wording", () => {
   assert.equal(matches[0].afterMessageIndex, 2);
 });
 
+test("supports conservative generic topics outside the built-in alias list", () => {
+  const matches = detectBoomerangs([
+    assistant("We can rule out middleware.", "claude-code"),
+    assistant("The root cause is middleware behavior.", "claude-code"),
+  ]);
+
+  assert.ok(matches.length >= 1);
+  assert.equal(matches[0].topic, "generic:middleware");
+  assert.equal(matches[0].topicLabel, "middleware");
+});
+
 test("extracts both sides of a not-X-but-Y contrast without inventing a same-message boomerang", () => {
   const messages = [
     dsh("不是缓存，而是配置。"),
