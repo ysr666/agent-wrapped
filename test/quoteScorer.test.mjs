@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { scoreQuoteFacets } from "../dist/core/facetScorer.js";
 import { rankQuoteCandidates, scoreQuote } from "../dist/core/quoteScorer.js";
+import { funCandidateBenchmarks } from "./fixtures/funCandidateBenchmarks.mjs";
 import { hardNegativeBenchmarks } from "./fixtures/hardNegativeBenchmarks.mjs";
 import { publicQuoteBenchmarks } from "./fixtures/publicQuoteBenchmarks.mjs";
 
@@ -39,7 +41,7 @@ for (const benchmark of publicQuoteBenchmarks) {
 }
 
 for (const benchmark of hardNegativeBenchmarks) {
-  test(`hard negative benchmark: ${benchmark.id}`, () => {
+  test(`quote-ranking hard negative: ${benchmark.id}`, () => {
     const gold = scoreQuote(benchmark.gold);
 
     for (const negativeText of benchmark.negatives) {
@@ -47,11 +49,30 @@ for (const benchmark of hardNegativeBenchmarks) {
       assert.ok(
         gold.score > negative.score,
         [
-          `hard negative beat or tied the intended quote in ${benchmark.id}`,
+          `quote-ranking decoy beat or tied the intended quote in ${benchmark.id}`,
           `gold: ${JSON.stringify(gold.text)} (${gold.score})`,
-          `negative: ${JSON.stringify(negative.text)} (${negative.score})`,
+          `decoy: ${JSON.stringify(negative.text)} (${negative.score})`,
           `gold signals: ${JSON.stringify(gold.signals)}`,
-          `negative signals: ${JSON.stringify(negative.signals)}`,
+          `decoy signals: ${JSON.stringify(negative.signals)}`,
+          "Note: a decoy may still be fun in another award category.",
+        ].join("\n"),
+      );
+    }
+  });
+}
+
+for (const benchmark of funCandidateBenchmarks) {
+  test(`fun candidate facets: ${benchmark.id}`, () => {
+    const facets = scoreQuoteFacets(benchmark.text, benchmark.repetitionCount);
+
+    for (const [facet, minimum] of Object.entries(benchmark.expect)) {
+      assert.ok(
+        facets[facet] >= minimum,
+        [
+          `fun candidate lost its expected ${facet} signal in ${benchmark.id}`,
+          `text: ${JSON.stringify(benchmark.text)}`,
+          `expected ${facet} >= ${minimum}, got ${facets[facet]}`,
+          `all facets: ${JSON.stringify(facets)}`,
         ].join("\n"),
       );
     }
@@ -68,7 +89,7 @@ test("dramatic reversal combines discovery, reversal and confidence signals", ()
   assert.ok((result.signals["signal-synergy"] ?? 0) > 0);
 });
 
-test("generic confidence is weaker than a dramatic reversal", () => {
+test("generic confidence is weaker than a dramatic reversal as the single gold quote", () => {
   const dramatic = scoreQuote("重大发现！！！我们前面的路线完全错了！");
   const generic = scoreQuote("现在问题已经非常明确了。");
 
@@ -76,15 +97,18 @@ test("generic confidence is weaker than a dramatic reversal", () => {
   assert.ok((generic.signals["generic-template"] ?? 0) < 0);
 });
 
-test("repetition penalty pushes repeated discoveries toward catchphrase territory", () => {
+test("repetition lowers one-off quote score but raises catchphrase and wolf-cry facets", () => {
   const once = scoreQuote("I'm on the exact defect now.", 1, true);
   const repeated = scoreQuote("I'm on the exact defect now.", 8, true);
+  const facets = scoreQuoteFacets("I found the root cause!", 8);
 
   assert.ok(once.score > repeated.score);
   assert.ok((repeated.signals.repetition ?? 0) < 0);
+  assert.ok(facets.catchphrase >= 70);
+  assert.ok(facets.wolfCry >= 70);
 });
 
-test("DSH-style repeated clarity line loses to a one-off reversal", () => {
+test("DSH-style repeated clarity line loses the gold-quote slot but survives as a catchphrase", () => {
   const messages = [
     ...Array.from({ length: 6 }, () => ({
       role: "assistant",
@@ -109,9 +133,12 @@ test("DSH-style repeated clarity line loses to a one-off reversal", () => {
   const repeated = ranked.find((candidate) => candidate.text === "现在问题已经非常明确了。");
   assert.ok(repeated, "repeated DSH-style clarity line should still be extracted for comparison");
   assert.ok(ranked[0].score > repeated.score);
+
+  const facets = scoreQuoteFacets("现在问题已经非常明确了。", 6);
+  assert.ok(facets.catchphrase >= 70, `expected catchphrase value, got ${JSON.stringify(facets)}`);
 });
 
-test("code and command noise is penalized", () => {
+test("code and command noise is penalized for quote ranking", () => {
   const result = scoreQuote("npm test && git status --short");
   assert.ok((result.signals["code-noise"] ?? 0) < 0);
 });
