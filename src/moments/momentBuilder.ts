@@ -85,45 +85,45 @@ function makeRepeatedPatterns(graph: MomentGraph, minCount: number): Moment[] {
 }
 
 function makeBoomerangs(graph: MomentGraph, byId: Map<string, Event>): Moment[] {
-  return relationsOfType(graph, "contradicts")
-    .map((relation) => {
-      const before = byId.get(relation.fromEventId);
-      const after = byId.get(relation.toEventId);
-      if (!before || !after) return undefined;
-      return {
-        id: `boomerang:${relation.id}`,
-        type: "boomerang" as const,
-        eventIds: [before.id, after.id],
-        relationIds: [relation.id],
-        messageIndexes: uniqueSorted([before.messageIndex, after.messageIndex]),
-        primaryText: before.text,
-        relatedTexts: [after.text],
-        topic: relation.topic,
-        topicLabel: relation.topicLabel,
-        evidence: [...relation.reasons],
-      };
-    })
-    .filter((moment): moment is Moment => Boolean(moment));
+  const moments: Moment[] = [];
+  for (const relation of relationsOfType(graph, "contradicts")) {
+    const before = byId.get(relation.fromEventId);
+    const after = byId.get(relation.toEventId);
+    if (!before || !after) continue;
+    moments.push({
+      id: `boomerang:${relation.id}`,
+      type: "boomerang",
+      eventIds: [before.id, after.id],
+      relationIds: [relation.id],
+      messageIndexes: uniqueSorted([before.messageIndex, after.messageIndex]),
+      primaryText: before.text,
+      relatedTexts: [after.text],
+      topic: relation.topic,
+      topicLabel: relation.topicLabel,
+      evidence: [...relation.reasons],
+    });
+  }
+  return moments;
 }
 
 function makeFalseDawns(graph: MomentGraph, byId: Map<string, Event>): Moment[] {
-  return relationsOfType(graph, "celebrates_before")
-    .map((relation) => {
-      const before = byId.get(relation.fromEventId);
-      const after = byId.get(relation.toEventId);
-      if (!before || !after) return undefined;
-      return {
-        id: `false_dawn:${relation.id}`,
-        type: "false_dawn" as const,
-        eventIds: [before.id, after.id],
-        relationIds: [relation.id],
-        messageIndexes: uniqueSorted([before.messageIndex, after.messageIndex]),
-        primaryText: before.text,
-        relatedTexts: [after.text],
-        evidence: [...relation.reasons],
-      };
-    })
-    .filter((moment): moment is Moment => Boolean(moment));
+  const moments: Moment[] = [];
+  for (const relation of relationsOfType(graph, "celebrates_before")) {
+    const before = byId.get(relation.fromEventId);
+    const after = byId.get(relation.toEventId);
+    if (!before || !after) continue;
+    moments.push({
+      id: `false_dawn:${relation.id}`,
+      type: "false_dawn",
+      eventIds: [before.id, after.id],
+      relationIds: [relation.id],
+      messageIndexes: uniqueSorted([before.messageIndex, after.messageIndex]),
+      primaryText: before.text,
+      relatedTexts: [after.text],
+      evidence: [...relation.reasons],
+    });
+  }
+  return moments;
 }
 
 function makePlotTwists(
@@ -247,7 +247,7 @@ function makeCorrectionArcs(graph: MomentGraph, windowMessages: number): Moment[
       type: "correction_arc",
       eventIds,
       relationIds: internalRelationIds(graph, eventIds),
-      messageIndexes: uniqueSorted(eventIds.map((id) => graph.events.find((event) => event.id === id)?.messageIndex ?? 0)),
+      messageIndexes: uniqueSorted([before.messageIndex, pivot.messageIndex, after.messageIndex]),
       primaryText: pivot.text,
       relatedTexts: [before.text, after.text],
       topic: pivot.topics[0]?.topic ?? after.topics[0]?.topic ?? before.topics[0]?.topic,
