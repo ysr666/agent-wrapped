@@ -39,10 +39,9 @@ export function buildSequenceRelations(
   for (let index = 0; index < sorted.length; index += 1) {
     const before = sorted[index];
     if (!before) continue;
-    const celebration = Math.max(
-      getEventStrength(before, "celebration"),
-      getEventStrength(before, "resolution_claim"),
-    );
+    const celebrationStrength = getEventStrength(before, "celebration");
+    const resolutionStrength = getEventStrength(before, "resolution_claim");
+    const celebration = Math.max(celebrationStrength, resolutionStrength);
     if (celebration < 60) continue;
 
     let best:
@@ -68,15 +67,28 @@ export function buildSequenceRelations(
 
     if (!best) continue;
     const closeness = Math.max(0, 1 - best.distance / Math.max(1, celebrationWindowMessages));
+    // A concrete “fixed / solved / no problem now” claim is stronger false-dawn
+    // evidence than a generic cheer such as “Perfect!”. Keep both, but prefer the
+    // explicit resolution claim when several celebrations are later overturned.
+    const resolutionBonus = resolutionStrength > 0 ? 20 : 0;
     relations.push({
       id: `celebrates_before:${before.id}->${best.event.id}`,
       fromEventId: before.id,
       toEventId: best.event.id,
       type: "celebrates_before",
-      strength: clamp(celebration * 0.45 + best.reversal * 0.45 + closeness * 10),
+      strength: clamp(
+        celebration * 0.45 +
+          best.reversal * 0.45 +
+          closeness * 10 +
+          resolutionBonus,
+      ),
       confidence: clamp(Math.min(before.confidence, best.event.confidence) * 0.9 + 10),
       distance: best.distance,
-      reasons: ["celebration/resolution claim followed by an explicit correction or reversal"],
+      reasons: [
+        resolutionStrength > 0
+          ? "explicit resolution claim followed by an explicit correction or reversal"
+          : "celebration followed by an explicit correction or reversal",
+      ],
     });
   }
 
