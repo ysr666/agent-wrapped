@@ -294,14 +294,16 @@ export function analyzeSession(
     plotTwist ? makeAward("plot-twist", plotTwist, plotTwist.facets.reversal) : undefined,
   );
 
-  const emotionalPeak = pickFacetCandidate(candidates, "drama", 40, usedTexts);
-  addAward(
-    emotionalPeak ? makeAward("emotional-peak", emotionalPeak, emotionalPeak.facets.drama) : undefined,
-  );
-
+  // Reserve strong progress narration before selecting the general emotional
+  // peak, otherwise a line like “重大进展！！！” can occupy both cards.
   const progress = pickFacetCandidate(candidates, "progress", 50, usedTexts);
   addAward(
     progress ? makeAward("progress-announcement", progress, progress.facets.progress) : undefined,
+  );
+
+  const emotionalPeak = pickFacetCandidate(candidates, "drama", 40, usedTexts);
+  addAward(
+    emotionalPeak ? makeAward("emotional-peak", emotionalPeak, emotionalPeak.facets.drama) : undefined,
   );
 
   const victoryLap = pickFacetCandidate(candidates, "celebration", 55, usedTexts);
