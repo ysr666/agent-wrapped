@@ -74,6 +74,7 @@ function makeRepeatedPatterns(graph: MomentGraph, minCount: number): Moment[] {
     messageIndexes: cluster.messageIndexes,
     primaryText: cluster.canonicalText,
     relatedTexts: cluster.variants.filter((variant) => variant !== cluster.canonicalText),
+    family: cluster.family,
     count: cluster.count,
     variants: cluster.variants,
     evidence: [
