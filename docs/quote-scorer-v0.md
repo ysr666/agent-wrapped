@@ -2,9 +2,11 @@
 
 QuoteScorer v0 is deliberately **local-first, not local-only**.
 
-Its job is narrow: rank sentence-like assistant utterances by how likely they are to be a memorable, funny, dramatic quote.
+Its job is narrow: rank sentence-like assistant utterances for the **single quote-of-the-session slot**.
 
-It does **not** try to fully understand the whole session, prove contradictions, or replace a semantic model.
+It is **not** a universal "is this line fun?" classifier. A line can lose the gold-quote ranking and still be excellent material for a catchphrase, wolf-cried-again, progress, celebration, or emotional-peak award.
+
+It also does not try to fully understand the whole session, prove contradictions, or replace a semantic model.
 
 ## Why start local
 
@@ -16,13 +18,13 @@ For the quote-of-the-session task, many of the strongest signals are structural 
 - confidence escalation: “exact defect”, “definitely”, “可以确定”, “根因就是”
 - dramatic punctuation and interjections
 - contrast / plot-twist language
-- repetition, which is useful as a **negative** signal for quote ranking because repeated lines usually belong in the catchphrase category instead
+- repetition, which is useful as a **negative signal only for the one-off quote ranking** because repeated lines often belong in the catchphrase / wolf-cry categories instead
 
 These signals are multilingual enough to get a useful first ranking without sending private transcripts to another model or adding token cost.
 
 ## What v0 scores
 
-The current scorer combines:
+The current quote scorer combines:
 
 1. expressive punctuation
 2. discovery / root-cause declarations
@@ -34,17 +36,41 @@ The current scorer combines:
 8. quote-friendly length
 9. cross-signal synergy
 
-It subtracts points for:
+It subtracts quote-ranking points for:
 
 - generic agent templates such as “Now the problem is very clear.”
 - code / command / stack-trace noise
-- exact repetition, because repeated lines are more likely to be catchphrases than one-off quotes
+- exact repetition, because repeated lines are more likely to be catchphrases than one-off quote winners
 
 A line such as:
 
 > 重大发现！！！我们前面的路线完全错了！
 
 scores highly because it combines discovery + reversal + confidence + dramatic punctuation, not merely because it contains one magic keyword.
+
+## Multi-dimensional fun facets
+
+`scoreQuoteFacets()` now preserves several independent candidate dimensions:
+
+```text
+quote
+ drama
+ discovery
+ reversal
+ progress
+ celebration
+ catchphrase
+ wolfCry
+```
+
+Examples:
+
+- `现在问题已经非常明确了。` can have a low one-off quote score and a high catchphrase score when repeated.
+- `这次真的找到根因了！！！` can carry strong discovery and wolf-cry value across a session.
+- `完美命中！！！` can remain a celebration / emotional-peak candidate.
+- `重大发现！！！我们前面的路线完全错了！` can be strong on quote, discovery, reversal, and drama simultaneously.
+
+The facets are deliberately not collapsed back into one universal score. Final awards should use session context.
 
 ## What local rules will *not* reliably solve
 
@@ -55,6 +81,7 @@ Rule-based scoring is intentionally weaker at:
 - semantic contradiction with very different wording
 - deciding whether a technical discovery was genuinely surprising in context
 - long-range callbacks spanning many messages
+- deciding whether a victory lap was premature without looking at what happened later
 - distinguishing a brilliant line from a merely emotional line when both use similar surface language
 
 Those belong to later stages.
@@ -67,12 +94,13 @@ transcript
 local deterministic extraction
   ├─ sentence-like units
   ├─ quote signals
+  ├─ fun/category facets
   ├─ repetition / catchphrase candidates
   └─ obvious reversal events
   ↓
-local ranking (default, zero API cost)
+local award candidates (default, zero API cost)
   ↓
-optional semantic layer
+optional semantic/context layer
   ├─ local embeddings / small local model, if practical
   └─ opt-in LLM reranker for a small Top-N candidate set
 ```
@@ -81,9 +109,9 @@ The default experience should remain useful offline and private. An LLM should b
 
 ## v0 success criterion
 
-Before adding any LLM reranking, QuoteScorer v0 should consistently rank explicit dramatic reversals above generic confident status updates.
+Before adding any LLM reranking, QuoteScorer v0 should consistently rank explicit dramatic reversals above generic confident status updates **for the gold-quote slot**, without deleting the losing lines from other award pipelines.
 
-For example, this ordering is desired:
+For example, this quote ordering is desired:
 
 1. `重大发现！！！我们前面的路线完全错了！`
 2. `等等，我刚才的判断可能完全反了。`
@@ -91,4 +119,6 @@ For example, this ordering is desired:
 4. `现在问题已经非常明确了。`
 5. `我先检查一下配置文件。`
 
-The exact scores are not important yet; the ordering is.
+But if line 4 occurs twelve times, it should simultaneously become a strong catchphrase candidate.
+
+The exact scores are not important yet; the behavioral distinction is.
