@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 
 export interface BuildEvaluationCaseOptions {
-  /** Top P3 moments retained for human comparison. Defaults to 8, max 20. */
+  /** Top P3 moments retained for human comparison. Defaults to 8, max 20. Selected awards are always retained too. */
   topMoments?: number;
   /** Maximum pairwise tasks generated per session. Defaults to 12, max 40. */
   maxPairwiseTasks?: number;
@@ -31,26 +31,47 @@ function selectedAwardMap(report: ReturnType<typeof createWrappedReport>): Map<s
   return new Map(report.awards.map((award) => [award.momentId, { kind: award.kind, id: award.id }]));
 }
 
+function toSnapshot(
+  moment: NonNullable<ReturnType<typeof createWrappedReport>["rankedMoments"]>[number],
+  selected: Map<string, { kind: AwardKind; id: string }>,
+): EvaluationMomentSnapshot {
+  const award = selected.get(moment.id);
+  return {
+    id: moment.id,
+    type: moment.type,
+    primaryText: moment.primaryText,
+    relatedTexts: [...moment.relatedTexts],
+    funScore: moment.scores.funScore,
+    confidence: moment.scores.confidence,
+    selected: award !== undefined,
+    awardKind: award?.kind,
+    awardId: award?.id,
+  };
+}
+
 function snapshotMoments(
   report: ReturnType<typeof createWrappedReport>,
   topMoments: number,
 ): EvaluationMomentSnapshot[] {
   const selected = selectedAwardMap(report);
   const ranked = report.rankedMoments ?? [];
-  return ranked.slice(0, topMoments).map((moment) => {
-    const award = selected.get(moment.id);
-    return {
-      id: moment.id,
-      type: moment.type,
-      primaryText: moment.primaryText,
-      relatedTexts: [...moment.relatedTexts],
-      funScore: moment.scores.funScore,
-      confidence: moment.scores.confidence,
-      selected: award !== undefined,
-      awardKind: award?.kind,
-      awardId: award?.id,
-    };
-  });
+  const retained = new Map<string, EvaluationMomentSnapshot>();
+
+  for (const moment of ranked.slice(0, topMoments)) {
+    retained.set(moment.id, toSnapshot(moment, selected));
+  }
+
+  // P3.5 intentionally protects core award families, so a selected quote,
+  // catchphrase, or boomerang may sit below the raw P3 top-N. P6 must still
+  // retain every displayed card or human keep/drop votes would silently vanish.
+  for (const moment of ranked) {
+    if (!selected.has(moment.id) || retained.has(moment.id)) continue;
+    retained.set(moment.id, toSnapshot(moment, selected));
+  }
+
+  return [...retained.values()].sort(
+    (a, b) => b.funScore - a.funScore || b.confidence - a.confidence || a.id.localeCompare(b.id),
+  );
 }
 
 function pairKey(a: string, b: string): string {
