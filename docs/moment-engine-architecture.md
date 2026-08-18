@@ -4,7 +4,7 @@ Agent Wrapped is an **awards show built from session moments**, not a collection
 
 The core rule is:
 
-> First understand what happened. Then understand how those events relate. Only later decide how to present the funniest moments as awards.
+> First understand what happened. Then understand how those events relate. Then assemble complete moments and rank how entertaining they are. Only after that decide how to present them as awards.
 
 ## Pipeline
 
@@ -13,11 +13,11 @@ Transcript
    ↓
 Transcript / Unit normalization
    ↓
-EventExtractor                 ← P0
+EventExtractor                 ← P0 ✅
    ↓
 Event[]
    ↓
-MomentGraph                    ← P1
+MomentGraph                    ← P1 ✅
    ├─ repeats
    ├─ similar_to
    ├─ same_topic
@@ -26,11 +26,24 @@ MomentGraph                    ← P1
    ├─ followed_by
    └─ celebrates_before
    ↓
-MomentBuilder                  ← P2
+MomentBuilder                  ← P2 ✅
+   ├─ one_liner
+   ├─ repeated_pattern
+   ├─ boomerang
+   ├─ false_dawn
+   ├─ plot_twist
+   └─ correction_arc
    ↓
-MomentRanker                   ← P3
+MomentRanker                   ← P3 ✅
+   ├─ funScore
+   ├─ confidence
+   ├─ standaloneQuality
+   ├─ contextPayoff
+   ├─ surprise
+   ├─ rarity
+   └─ readability
    ↓
-AwardComposer                  ← P3.5
+AwardComposer                  ← P3.5 next
    ↓
 🎬 Agent Wrapped
 ```
@@ -43,24 +56,9 @@ Awards are a presentation layer. `🐺`, `🤡`, `🍾`, and `📢` should not e
 
 P0 establishes a single structured description of each assistant-visible transcript unit.
 
-## Canonical unit extraction
+`src/transcript/unitExtractor.ts` owns sentence-like splitting. `src/events/eventExtractor.ts` converts those units into multi-label events rather than forcing each line into a single class.
 
-`src/transcript/unitExtractor.ts` owns sentence-like splitting for the new architecture. It keeps short dramatic lead-ins attached to the sentence that gives them meaning, for example:
-
-```text
-重大发现！！！我们前面的路线完全错了！
-Wait! I was wrong.
-```
-
-User/tool/system content is not turned into assistant events.
-
-## Event model
-
-`src/events/types.ts` defines a multi-label `Event`.
-
-A single line may simultaneously contain discovery, confidence, and reversal. Therefore `primaryType` is only a summary; downstream code should use `signals` for the full meaning.
-
-Current event signals:
+Current event signals include:
 
 ```text
 discovery_claim
@@ -76,21 +74,11 @@ promise
 neutral
 ```
 
-Each event also carries:
+Each event also carries normalized/simplified text, message position, topics, structured claims/stance, an optional verbal family, drama, standalone quality, and extraction confidence.
 
-- normalized and simplified text;
-- message/unit position;
-- extraction confidence;
-- `drama` and `standaloneQuality` surface scores;
-- canonical topics;
-- structured topic claims and stance;
-- an optional verbal-tic family.
+`src/events/lexicon.ts` is the shared phrase/rule layer. `src/events/topicResolver.ts` is the shared topic/stance layer.
 
-## One lexicon, one topic resolver
-
-`src/events/lexicon.ts` is the shared rule/phrase layer for event signals and common verbal-tic families.
-
-`src/events/topicResolver.ts` is the shared topic + stance layer for claims such as:
+Examples:
 
 ```text
 可以排除缓存        → cache / exclude
@@ -98,116 +86,270 @@ Each event also carries:
 不是缓存，而是配置  → cache / exclude + config / blame
 ```
 
-Host/model differences may later tune a profile or prior, but they must not create separate definitions of what a discovery, reversal, or contradiction is.
-
-## Legacy compatibility after P0
-
-The existing public modules remain callable, but semantic interpretation is being moved underneath them:
-
-- `FacetScorer` now derives its semantic facets from `EventExtractor`;
-- `QuoteScorer` uses the canonical UnitExtractor and EventExtractor for semantic cues, while keeping only standalone-quote concerns such as code noise, length, formatting, and generic-template penalties;
-- `BoomerangDetector` no longer owns its own topic/stance parser.
-
-This lets the existing benchmark suite keep running while the architecture migrates incrementally.
+Host/model differences may later tune profiles or priors, but they must not create separate definitions of discovery, reversal, or contradiction.
 
 ---
 
 # P1 — Moment Graph ✅
 
-P1 connects events. The graph describes relationships; it does **not** decide awards.
-
-## Graph model
+P1 connects events without deciding awards.
 
 `src/graph/types.ts` defines `MomentGraph` and `MomentRelation`.
 
 Current relations:
 
-### `repeats`
-Exact normalized repetition.
+- `repeats` — exact normalized repetition;
+- `similar_to` — conservative local paraphrase/verbal-tic similarity;
+- `same_topic` — shared canonical topic;
+- `contradicts` — opposite explicit claims about the same topic;
+- `retracts` — later explicit correction/reversal of an earlier same-topic view;
+- `followed_by` — chronological adjacency;
+- `celebrates_before` — celebration/resolution followed soon by correction/reversal.
 
-### `similar_to`
-Conservative local paraphrase / verbal-tic similarity.
+P1 avoids unrestricted all-pairs scans. Exact/family repetition uses indexed previous matches; fuzzy repetition and topic comparison use bounded recent-event windows.
 
-Known verbal families are high-confidence. Unknown wording can use bounded high-overlap n-gram matching.
+The old CatchphraseClusterer and BoomerangDetector APIs remain compatibility surfaces, but their semantic relationship logic lives underneath the award layer.
 
-### `same_topic`
-Two events refer to the same canonical topic.
+---
 
-### `contradicts`
-Two events make opposite explicit claims about the same topic.
+# P2 — Moment model + MomentBuilder ✅
+
+P2 is the first stage that assembles **stories** rather than isolated facts.
+
+The canonical model lives in `src/moments/types.ts`. A `Moment` contains:
+
+```text
+id
+type
+eventIds
+relationIds
+messageIndexes
+primaryText
+relatedTexts
+topic/topicLabel (when relevant)
+count/variants (when relevant)
+evidence[]
+```
+
+A Moment deliberately has no award title or emoji. It is analysis output, not presentation output.
+
+`src/moments/momentBuilder.ts` currently composes six moment types.
+
+## `one_liner`
+
+A single event with enough standalone/drama value to remain a candidate without context.
 
 Example:
 
 ```text
-cache / exclude
-      ↓ contradicts
-cache / blame
+重大发现！！！我们前面的路线完全错了！
 ```
 
-### `retracts`
-A later explicit correction/reversal retracts an earlier same-topic view.
+## `repeated_pattern`
 
-### `followed_by`
-Chronological adjacency between extracted events.
+A connected repetition cluster assembled from `repeats` / `similar_to` relations.
 
-### `celebrates_before`
-A celebration/resolution claim is followed within a bounded window by an explicit correction/reversal.
+Example:
 
-This is the graph primitive that can later become a `false_dawn` Moment; it is not itself the 🍾 award.
+```text
+现在问题已经非常明确了。
+问题现在已经很清楚了。
+这下问题就非常明确了！
+```
 
-## Long-session behavior
+The Moment preserves canonical text, variants, count, and all message positions.
 
-P1 avoids an unrestricted all-pairs comparison.
+## `boomerang`
 
-- exact and known-family repetition use indexed previous matches;
-- fuzzy repetition only scans a bounded recent-event window;
-- topic/contradiction matching scans a bounded recent-event window and message-distance horizon.
+A pair created from a `contradicts` relation.
 
-This keeps local-first analysis practical for long agent sessions.
+```text
+可以完全排除缓存。
+        ↓
+最终根因还是缓存。
+```
 
-## Legacy compatibility after P1
+This is the structural moment. Calling it `🤡 最大回旋镖` belongs to P3.5.
 
-`CatchphraseClusterer` is now a compatibility wrapper over graph repetition relations and connected components.
+## `false_dawn`
 
-`BoomerangDetector` is now a compatibility wrapper over `MomentGraph.contradicts` relations.
+A pair created from `celebrates_before`.
 
-Their external APIs remain useful for current `SessionAnalyzer` tests, but the language/relationship logic now lives below the award layer.
+```text
+这次应该真的没问题了！
+        ↓
+等等，不对……
+```
+
+## `plot_twist`
+
+An explicit correction/reversal. When a `retracts` relation exists, the Moment includes the earlier view as context; otherwise a sufficiently strong standalone reversal can still become a plot-twist candidate.
+
+## `correction_arc`
+
+A short multi-event narrative:
+
+```text
+earlier diagnosis / confident state
+        ↓
+explicit correction or reversal
+        ↓
+renewed diagnosis / discovery state
+```
+
+P2 uses a bounded message window and requires at least a three-event structure. This is deliberately a composition primitive, not a hard-coded award.
+
+## P2 overlap policy
+
+The builder is allowed to emit overlapping moments.
+
+For example, a dramatic reversal line may simultaneously appear as:
+
+- a `one_liner`;
+- a `plot_twist`;
+- the pivot of a `correction_arc`;
+- one side of a `boomerang`.
+
+That is intentional. P2 maximizes useful structural recall. P3 ranks candidates; P3.5 will perform final diversity/deduplication for display.
 
 ---
 
-# Architectural boundary after P1
+# P3 — MomentRanker ✅
 
-P0 and P1 answer only:
+P3 answers:
+
+> Which complete moments are most entertaining and worth showing?
+
+It does **not** assign award names.
+
+`src/moments/momentRanker.ts` scores each composed Moment on independent dimensions.
+
+## `funScore`
+
+Overall entertainment ranking signal. It uses type-specific weights rather than pretending a one-liner and a boomerang are funny for the same reason.
+
+For example:
+
+- one-liners emphasize standalone wording and surprise;
+- repeated patterns emphasize repetition structure and context payoff;
+- boomerangs emphasize contradiction, surprise, and before/after payoff;
+- false dawns emphasize sequence payoff;
+- correction arcs emphasize multi-step context and structural strength.
+
+## `confidence`
+
+Confidence that the underlying extraction/relationship is genuinely present.
+
+**Confidence never multiplies `funScore`.**
+
+This is a hard design boundary. A candidate can be:
 
 ```text
-What happened?
-How are those things related?
+funScore = 94
+confidence = 57
+```
+
+and remain a strong candidate for a future semantic reranker instead of being silently treated as “not funny.”
+
+## Supporting dimensions
+
+P3 also exposes:
+
+- `standaloneQuality` — how well the wording works without context;
+- `contextPayoff` — how much the session structure adds;
+- `surprise` — reversal/unexpected-turn energy;
+- `rarity` — relative scarcity of the moment type in the current candidate set;
+- `readability` — whether the selected span is screenshot/readback friendly;
+- `structuralStrength` — strength of the event/graph evidence supporting the Moment.
+
+## Ranking behavior
+
+`rankMoments(graph, moments)` sorts primarily by `funScore`, using confidence/context only as tie-breakers. Optional filters can set independent minimums for fun and confidence.
+
+The convenience API:
+
+```ts
+analyzeMoments(messages)
+```
+
+runs the current core pipeline end-to-end:
+
+```text
+P0 EventExtractor
+→ P1 MomentGraph
+→ P2 MomentBuilder
+→ P3 MomentRanker
+```
+
+and returns ranked `RankedMoment[]`.
+
+---
+
+# Legacy compatibility after P3
+
+The existing QuoteScorer, FacetScorer, CatchphraseClusterer, BoomerangDetector, and SessionAnalyzer APIs still exist so the earlier regression suite and integrations do not break during migration.
+
+`SessionAnalyzer` is still an awards-first compatibility adapter. It already consumes the P1 graph for repeated patterns, contradictions, and false-dawn relationships, but it should **not** become the new product architecture.
+
+P3.5 will introduce `AwardComposer`, and that will become the proper presentation layer over ranked Moments.
+
+No new `SomethingDetector` should be introduced unless the concept truly cannot be represented as:
+
+```text
+Event
+→ Relation
+→ Moment composition
+```
+
+---
+
+# Test boundaries
+
+The regression suite is now layered:
+
+```text
+test:event           → P0 event extraction
+test:graph           → P1 relations
+test:moment-builder  → P2 composition
+test:moment-ranker   → P3 scoring/ranking
+test:moments         → P2 + P3 together
+```
+
+The older quote/catchphrase/boomerang/session tests remain compatibility tests.
+
+P2 tests verify that the same graph can create repeated patterns, boomerangs, false dawns, plot twists, and correction arcs without award metadata leaking into the Moment model.
+
+P3 tests verify that:
+
+- contextual boomerangs outrank generic status lines;
+- `funScore` remains independent from confidence;
+- stronger repetition increases repeated-pattern payoff;
+- correction arcs gain value from context rather than only one sentence;
+- `analyzeMoments()` returns descending ranked Moments.
+
+---
+
+# Architectural boundary after P3
+
+P0 through P3 now answer:
+
+```text
+P0  What happened?
+P1  How are those things related?
+P2  Which event/relationship structures form complete moments?
+P3  Which moments are most entertaining?
 ```
 
 They intentionally do **not** answer:
 
 ```text
-Which relationships form a complete entertaining Moment?
-Which Moments are funniest?
-Which 4–7 should appear in Wrapped?
+Which 4–7 moments should appear together on the final Wrapped card?
+How much category diversity should the final set have?
+Should two overlapping moments collapse into one display item?
 What should each award be called?
+Should an award title be fixed or dynamically generated from the moment?
 ```
 
-Those belong to P2/P3/P3.5.
+Those belong to **P3.5 — AwardComposer**.
 
-Until P2 is complete, `SessionAnalyzer` remains a legacy awards-first adapter for compatibility. New features should not add another `SomethingDetector`; they should first ask whether the behavior is an Event type, a graph Relation, or eventually a Moment composition.
-
-## Next stage
-
-P2 should introduce a `Moment` model and `MomentBuilder` that consumes `Event[] + MomentRelation[]` and emits compositions such as:
-
-```text
-one_liner
-repeated_pattern
-boomerang
-false_dawn
-plot_twist
-correction_arc
-```
-
-That is the point where Agent Wrapped moves from detecting signals to actually assembling stories.
+The next stage should consume ranked Moments, perform display-level diversity/deduplication, select only genuinely strong material, and map those moments into the playful award language users actually see.
