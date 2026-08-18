@@ -4,7 +4,7 @@ Agent Wrapped is an **awards show built from session moments**, not a collection
 
 The core rule is:
 
-> First understand what happened. Then understand how those events relate. Then assemble complete moments and rank how entertaining they are. Only after that decide how to present them as awards.
+> First understand what happened. Then understand how those events relate. Then assemble complete moments and rank how entertaining they are. Only after that decide which moments deserve cards and how to present them.
 
 ## Pipeline
 
@@ -41,14 +41,28 @@ MomentRanker                   ← P3 ✅
    ├─ contextPayoff
    ├─ surprise
    ├─ rarity
-   └─ readability
+   ├─ readability
+   └─ structuralStrength
    ↓
-AwardComposer                  ← P3.5 next
+AwardComposer                  ← P3.5 ✅
+   ├─ quote
+   ├─ catchphrase
+   ├─ boomerang
+   ├─ wolf-cry
+   ├─ premature-celebration
+   ├─ plot-twist
+   └─ emotional-peak
+   ↓
+WrappedReport / Renderer       ← P4 ✅
+   ├─ compact share payload
+   ├─ Markdown
+   ├─ plain text
+   └─ human-preference hooks
    ↓
 🎬 Agent Wrapped
 ```
 
-Awards are a presentation layer. `🐺`, `🤡`, `🍾`, and `📢` should not each grow an independent language parser.
+Awards are a presentation layer. `🐺`, `🤡`, `🍾`, and `📢` do not each get an independent language parser.
 
 ---
 
@@ -108,13 +122,13 @@ Current relations:
 
 P1 avoids unrestricted all-pairs scans. Exact/family repetition uses indexed previous matches; fuzzy repetition and topic comparison use bounded recent-event windows.
 
-The old CatchphraseClusterer and BoomerangDetector APIs remain compatibility surfaces, but their semantic relationship logic lives underneath the award layer.
+The old CatchphraseClusterer and BoomerangDetector APIs remain compatibility surfaces, but their semantic relationship logic now lives underneath the award layer.
 
 ---
 
 # P2 — Moment model + MomentBuilder ✅
 
-P2 is the first stage that assembles **stories** rather than isolated facts.
+P2 assembles **stories** rather than isolated facts.
 
 The canonical model lives in `src/moments/types.ts`. A `Moment` contains:
 
@@ -127,19 +141,18 @@ messageIndexes
 primaryText
 relatedTexts
 topic/topicLabel (when relevant)
+family (for repeated verbal patterns)
 count/variants (when relevant)
 evidence[]
 ```
 
 A Moment deliberately has no award title or emoji. It is analysis output, not presentation output.
 
-`src/moments/momentBuilder.ts` currently composes six moment types.
+`src/moments/momentBuilder.ts` composes six moment types.
 
 ## `one_liner`
 
 A single event with enough standalone/drama value to remain a candidate without context.
-
-Example:
 
 ```text
 重大发现！！！我们前面的路线完全错了！
@@ -149,15 +162,13 @@ Example:
 
 A connected repetition cluster assembled from `repeats` / `similar_to` relations.
 
-Example:
-
 ```text
 现在问题已经非常明确了。
 问题现在已经很清楚了。
 这下问题就非常明确了！
 ```
 
-The Moment preserves canonical text, variants, count, and all message positions.
+The Moment preserves canonical text, variants, count, message positions, and its typed verbal-family hint.
 
 ## `boomerang`
 
@@ -169,7 +180,7 @@ A pair created from a `contradicts` relation.
 最终根因还是缓存。
 ```
 
-This is the structural moment. Calling it `🤡 最大回旋镖` belongs to P3.5.
+This is structural analysis. Calling it `🤡 最大回旋镖` happens later in P3.5.
 
 ## `false_dawn`
 
@@ -183,7 +194,7 @@ A pair created from `celebrates_before`.
 
 ## `plot_twist`
 
-An explicit correction/reversal. When a `retracts` relation exists, the Moment includes the earlier view as context; otherwise a sufficiently strong standalone reversal can still become a plot-twist candidate.
+An explicit correction/reversal. When a `retracts` relation exists, the Moment carries the earlier view as context; otherwise a sufficiently strong standalone reversal can still become a plot-twist candidate.
 
 ## `correction_arc`
 
@@ -197,20 +208,7 @@ explicit correction or reversal
 renewed diagnosis / discovery state
 ```
 
-P2 uses a bounded message window and requires at least a three-event structure. This is deliberately a composition primitive, not a hard-coded award.
-
-## P2 overlap policy
-
-The builder is allowed to emit overlapping moments.
-
-For example, a dramatic reversal line may simultaneously appear as:
-
-- a `one_liner`;
-- a `plot_twist`;
-- the pivot of a `correction_arc`;
-- one side of a `boomerang`.
-
-That is intentional. P2 maximizes useful structural recall. P3 ranks candidates; P3.5 will perform final diversity/deduplication for display.
+P2 intentionally allows overlapping candidates. One dramatic reversal can appear as a one-liner, plot twist, correction-arc pivot, or one side of a boomerang. P3.5 decides what should actually survive to display.
 
 ---
 
@@ -222,17 +220,15 @@ P3 answers:
 
 It does **not** assign award names.
 
-`src/moments/momentRanker.ts` scores each composed Moment on independent dimensions.
+`src/moments/momentRanker.ts` scores each Moment on independent dimensions.
 
 ## `funScore`
 
-Overall entertainment ranking signal. It uses type-specific weights rather than pretending a one-liner and a boomerang are funny for the same reason.
-
-For example:
+Overall entertainment ranking signal. Type-specific weights are used because a one-liner and a boomerang are funny for different reasons.
 
 - one-liners emphasize standalone wording and surprise;
 - repeated patterns emphasize repetition structure and context payoff;
-- boomerangs emphasize contradiction, surprise, and before/after payoff;
+- boomerangs emphasize contradiction and before/after payoff;
 - false dawns emphasize sequence payoff;
 - correction arcs emphasize multi-step context and structural strength.
 
@@ -242,114 +238,264 @@ Confidence that the underlying extraction/relationship is genuinely present.
 
 **Confidence never multiplies `funScore`.**
 
-This is a hard design boundary. A candidate can be:
+A candidate can legitimately be:
 
 ```text
 funScore = 94
 confidence = 57
 ```
 
-and remain a strong candidate for a future semantic reranker instead of being silently treated as “not funny.”
+and remain visible for later semantic verification instead of being silently treated as “not funny.”
 
-## Supporting dimensions
+Supporting dimensions:
 
-P3 also exposes:
-
-- `standaloneQuality` — how well the wording works without context;
-- `contextPayoff` — how much the session structure adds;
-- `surprise` — reversal/unexpected-turn energy;
-- `rarity` — relative scarcity of the moment type in the current candidate set;
-- `readability` — whether the selected span is screenshot/readback friendly;
-- `structuralStrength` — strength of the event/graph evidence supporting the Moment.
-
-## Ranking behavior
-
-`rankMoments(graph, moments)` sorts primarily by `funScore`, using confidence/context only as tie-breakers. Optional filters can set independent minimums for fun and confidence.
-
-The convenience API:
-
-```ts
-analyzeMoments(messages)
+```text
+standaloneQuality
+contextPayoff
+surprise
+rarity
+readability
+structuralStrength
 ```
 
-runs the current core pipeline end-to-end:
+`rankMoments(graph, moments)` sorts primarily by `funScore`, with confidence/context only as tie-breakers. Independent minimum thresholds can be applied.
+
+`analyzeMoments(messages)` remains the convenient P0→P3 analysis-only API.
+
+---
+
+# P3.5 — AwardComposer ✅
+
+P3.5 answers:
+
+> Which ranked moments should actually appear together in one Wrapped?
+
+It consumes `RankedMoment[]`. It does **not** inspect raw transcript messages and it does not add another phrase detector.
+
+The canonical code lives in:
+
+```text
+src/awards/types.ts
+src/awards/awardComposer.ts
+```
+
+Current user-facing award kinds:
+
+```text
+quote
+catchphrase
+boomerang
+wolf-cry
+premature-celebration
+plot-twist
+emotional-peak
+```
+
+Default Chinese labels are:
+
+```text
+🏆 本场金句
+📢 高频口癖
+🤡 最大回旋镖
+🐺 狼来了奖
+🍾 香槟开早了
+🧠 剧情急转弯
+💀 精神状态
+```
+
+English labels are also supported.
+
+## Core-slot policy
+
+The first selection pass protects the three MVP questions when strong candidates exist:
+
+1. strongest quote;
+2. strongest repeated verbal pattern (`catchphrase` or `wolf-cry`);
+3. strongest boomerang.
+
+The second pass fills remaining slots from the ranked candidate pool.
+
+This prevents a flood of structurally rich plot-twist variants from accidentally removing the product’s basic “best quote / what did it keep saying / biggest self-own” experience.
+
+## Quality policy
+
+P3.5 does not force a fixed number of awards.
+
+Default behavior:
+
+- quality floor via `minFunScore`;
+- confidence can be filtered independently via `minConfidence`;
+- default max is 5;
+- hard cap is 7;
+- default max per award kind is 1;
+- identical underlying event sets collapse;
+- strongly overlapping candidates within the same award family collapse;
+- cross-award reuse of a line is allowed when the surrounding structure changes the joke.
+
+A quiet session may produce zero cards. That is preferred to inventing filler.
+
+## Source wording boundary
+
+P3.5 never rewrites `primaryText` or `relatedTexts`. Award titles are presentation metadata; the quoted transcript text stays source-faithful.
+
+---
+
+# P4 — WrappedReport / output + evaluation shell ✅
+
+P4 is the first complete product-facing layer.
+
+It is intentionally thin: it orchestrates the already-tested phases and packages the result for display, sharing, and human evaluation.
+
+The canonical code lives in:
+
+```text
+src/wrapped/types.ts
+src/wrapped/wrappedReport.ts
+src/wrapped/renderer.ts
+src/wrapped/preference.ts
+```
+
+## `createWrappedReport(messages)`
+
+Runs:
 
 ```text
 P0 EventExtractor
 → P1 MomentGraph
 → P2 MomentBuilder
 → P3 MomentRanker
+→ P3.5 AwardComposer
+→ WrappedReport
 ```
 
-and returns ranked `RankedMoment[]`.
+The report contains:
+
+```text
+version
+locale
+title
+awards[]
+metrics
+diagnostics
+rankedMoments?   // opt-in only
+```
+
+By default the share payload does **not** include all P3 ranked moments. `includeRankedMoments: true` exists for debugging and human preference evaluation.
+
+## Renderers
+
+P4 currently exports:
+
+```ts
+renderWrappedMarkdown(report)
+renderWrappedText(report)
+```
+
+Renderers preserve source wording and hide `funScore` / confidence unless score display is explicitly enabled.
+
+Paired and multi-step moments are rendered chronologically. For example a correction arc is shown as:
+
+```text
+before
+  →
+correction pivot
+  →
+after
+```
+
+rather than exposing P2’s internal `primaryText` storage order.
+
+## Human-preference hook
+
+`summarizeWrappedPreferences(report, votes)` provides a small local data contract for real-session evaluation:
+
+```text
+keep / drop
+optional 1–5 fun rating
+latest vote per award wins
+unknown award ids ignored
+keep rate / average fun / missing votes summarized
+```
+
+This is deliberately not a learned reranker yet. It creates the measurement seam needed to collect preference data before adding more semantic complexity.
 
 ---
 
-# Legacy compatibility after P3
+# Legacy compatibility after P4
 
-The existing QuoteScorer, FacetScorer, CatchphraseClusterer, BoomerangDetector, and SessionAnalyzer APIs still exist so the earlier regression suite and integrations do not break during migration.
+The existing QuoteScorer, FacetScorer, CatchphraseClusterer, BoomerangDetector, and SessionAnalyzer APIs remain so earlier tests/integrations do not break during migration.
 
-`SessionAnalyzer` is still an awards-first compatibility adapter. It already consumes the P1 graph for repeated patterns, contradictions, and false-dawn relationships, but it should **not** become the new product architecture.
-
-P3.5 will introduce `AwardComposer`, and that will become the proper presentation layer over ranked Moments.
-
-No new `SomethingDetector` should be introduced unless the concept truly cannot be represented as:
+`SessionAnalyzer` is an awards-first compatibility adapter. New product work should use:
 
 ```text
 Event
 → Relation
-→ Moment composition
+→ Moment
+→ RankedMoment
+→ Award
+→ WrappedReport
 ```
+
+No new `SomethingDetector` should be introduced unless the concept truly cannot be represented inside those layers.
 
 ---
 
 # Test boundaries
 
-The regression suite is now layered:
+The regression suite is layered:
 
 ```text
 test:event           → P0 event extraction
 test:graph           → P1 relations
 test:moment-builder  → P2 composition
 test:moment-ranker   → P3 scoring/ranking
-test:moments         → P2 + P3 together
+test:award-composer  → P3.5 selection/presentation mapping
+test:wrapped         → P4 end-to-end report/render/evaluation
+test:moments         → P2 through P4 combined
 ```
 
-The older quote/catchphrase/boomerang/session tests remain compatibility tests.
+P3.5 tests verify:
 
-P2 tests verify that the same graph can create repeated patterns, boomerangs, false dawns, plot twists, and correction arcs without award metadata leaking into the Moment model.
+- seven distinct award families can coexist;
+- identical underlying stories collapse;
+- weak moments are not forced into the report;
+- output remains capped at seven;
+- the core quote/repetition/boomerang slots survive competition from side moments.
 
-P3 tests verify that:
+P4 tests verify:
 
-- contextual boomerangs outrank generic status lines;
-- `funScore` remains independent from confidence;
-- stronger repetition increases repeated-pattern payoff;
-- correction arcs gain value from context rather than only one sentence;
-- `analyzeMoments()` returns descending ranked Moments.
+- P0→P3.5 runs end to end;
+- user/tool text does not become analysis content;
+- source wording survives report composition and rendering;
+- Markdown/plain-text output hides internal scores by default;
+- quiet sessions can return zero awards;
+- English presentation works without rewriting transcript text;
+- human preference votes are summarized deterministically.
 
 ---
 
-# Architectural boundary after P3
+# Architectural boundary after P4
 
-P0 through P3 now answer:
-
-```text
-P0  What happened?
-P1  How are those things related?
-P2  Which event/relationship structures form complete moments?
-P3  Which moments are most entertaining?
-```
-
-They intentionally do **not** answer:
+P0 through P4 now answer:
 
 ```text
-Which 4–7 moments should appear together on the final Wrapped card?
-How much category diversity should the final set have?
-Should two overlapping moments collapse into one display item?
-What should each award be called?
-Should an award title be fixed or dynamically generated from the moment?
+P0    What happened?
+P1    How are those things related?
+P2    Which event/relation structures form complete moments?
+P3    Which moments are most entertaining?
+P3.5  Which moments belong together in the final award set?
+P4    How do we package, render, and evaluate that Wrapped result?
 ```
 
-Those belong to **P3.5 — AwardComposer**.
+Still intentionally outside the current core:
 
-The next stage should consume ranked Moments, perform display-level diversity/deduplication, select only genuinely strong material, and map those moments into the playful award language users actually see.
+```text
+host-specific transcript discovery/adapters
+weekly/monthly aggregation
+cross-agent leaderboards
+optional embedding/LLM semantic rerank
+web/share-card visual UI
+large-scale preference-trained calibration
+```
+
+Those should build on `WrappedReport` rather than bypassing the Moment Engine.
