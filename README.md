@@ -21,23 +21,25 @@ The architecture is **moment-first, award-second**:
 ```text
 Local session logs
   ↓
-Session ingestion      ✅ P5
+Session ingestion         ✅ P5
   ↓
 TranscriptMessage[]
   ↓
-EventExtractor         ✅ P0
+EventExtractor            ✅ P0
   ↓
-MomentGraph            ✅ P1
+MomentGraph               ✅ P1
   ↓
-MomentBuilder          ✅ P2
+MomentBuilder             ✅ P2
   ↓
-MomentRanker           ✅ P3
+MomentRanker              ✅ P3
   ↓
-AwardComposer          ✅ P3.5
+AwardComposer             ✅ P3.5
   ↓
-WrappedReport          ✅ P4
+WrappedReport             ✅ P4
   ↓
-Real-session evaluation ✅ P6
+Real-session evaluation  ✅ P6
+  ↓
+Local review runner       ✅ P7
   ↓
 🎬 Agent Wrapped
 ```
@@ -54,6 +56,44 @@ An award is how a strong moment gets presented; it is not a reason to create ano
 - ✅ **P4 — WrappedReport / output layer**: runs P0→P3.5 end to end, returns a compact share-oriented report, renders Markdown/plain text, and exposes lightweight preference hooks.
 - ✅ **P5 — Session ingestion**: adds the host-neutral `IngestedSession` boundary and a real DeepSeek Harness adapter for durable `session.jsonl` logs, including local discovery and DSH's default concatenated Zstandard storage.
 - ✅ **P6 — Real-session evaluation / calibration**: turns ingested sessions into bounded human-review cases, generates deterministic pairwise comparisons, records keep/drop + fun ratings + missed moments, and aggregates ranking/award calibration metrics.
+- ✅ **P7 — Local Evaluation Runner**: adds a resumable local CLI/workspace loop for preparing real DSH sessions, reviewing final cards and blind A/B rankings, checkpointing every answer, and printing calibration/status reports.
+
+## P7 quick start
+
+Build once, then run the local experiment loop:
+
+```bash
+npm run build
+
+# 1. Read the newest real DSH sessions and create/update the local review workspace.
+node dist/cli.js dsh --latest 30
+
+# 2. Review one session at a time. Re-running resumes unanswered items.
+node dist/cli.js review
+
+# Or continue through every incomplete session.
+node dist/cli.js review --all
+
+# 3. Inspect progress and calibration.
+node dist/cli.js status
+node dist/cli.js calibration
+```
+
+When installed as a package/bin, the same commands are:
+
+```bash
+agent-wrapped dsh --latest 30
+agent-wrapped review
+agent-wrapped calibration
+```
+
+The default P7 workspace is `$AGENT_WRAPPED_HOME/review-workspace.json`, falling back to `~/.agent-wrapped/review-workspace.json`. It stores P6 evaluation cases and human review data, **not copies of the full original DSH transcripts**.
+
+Pairwise review is deliberately blind to `funScore`, confidence, predicted winner, and selected/rejected status. Award review still shows the award category because the question there is whether that final card belongs in the Wrapped.
+
+Re-running `agent-wrapped dsh` preserves a human review only if that session's evaluation-case fingerprint is unchanged. If a code change altered the candidates/tasks, the stale review is invalidated instead of being silently attached to new output.
+
+See `docs/p7-local-review-runner.md` for the review protocol and storage behavior.
 
 ## Public APIs
 
@@ -80,23 +120,20 @@ const sessions = await loadDshSessions({ maxSessions: 20 });
 const report = createWrappedReport(sessions[0].messages);
 ```
 
-DSH discovery follows the harness convention: `$DSH_HOME/sessions` when `DSH_HOME` is set, otherwise `~/.dsh/sessions`. It understands plaintext `session.jsonl` and the current default `session.jsonl.zstd` layout. Direct Zstandard reads require a Node runtime with the Zstandard `node:zlib` API; exported plaintext `session.jsonl` remains ingestible on older supported Node runtimes.
+DSH discovery follows the harness convention: `$DSH_HOME/sessions` when `DSH_HOME` is set, otherwise `~/.dsh/sessions`. It understands plaintext `session.jsonl` and the current default `session.jsonl.zstd` layout.
 
 Reasoning blocks are **not included by default**. `includeVisibleReasoning: true` is an explicit caller choice for hosts/surfaces where that reasoning was actually exposed to the user.
 
-For P6 calibration:
+For P6/P7 calibration APIs:
 
 ```ts
-const batch = await prepareLocalDshEvaluation({
+const refreshed = await refreshLocalDshReviewWorkspace({
   ingest: { maxSessions: 50 },
   evaluation: { topMoments: 8, maxPairwiseTasks: 12 },
 });
 
-// After collecting human SessionHumanReview[]:
-const calibration = buildCalibrationReport(batch.cases, reviews);
+const calibration = calibrateReviewWorkspace(refreshed.workspace);
 ```
-
-P6 evaluation cases keep only the selected/top Moment material needed for review; they do not copy entire transcripts into the benchmark dataset.
 
 Existing QuoteScorer, CatchphraseClusterer, BoomerangDetector, FacetScorer, and SessionAnalyzer APIs remain as compatibility surfaces while new work uses the Moment Engine pipeline.
 
@@ -109,11 +146,11 @@ See `docs/moment-engine-architecture.md` for architecture and phase boundaries.
 - ⏭️ OpenAI Codex — next adapter
 - ⏭️ OpenCode — later
 
-The ingestion boundary is host-neutral; adding another adapter must end in the same `TranscriptMessage[]` model instead of changing P0–P6 semantics.
+The ingestion boundary is host-neutral; adding another adapter must end in the same `TranscriptMessage[]` model instead of changing P0–P7 semantics.
 
 ## Design principles
 
-1. **Local-first by default.** P0–P6 work without another LLM call.
+1. **Local-first by default.** P0–P7 work without another LLM call.
 2. **Use only exposed transcript data.** Agent Wrapped analyzes visible messages made available by the host. It does not attempt to recover hidden chain-of-thought.
 3. **Original wording matters.** Award/report layers preserve the agent’s source wording instead of regenerating “funnier” quotes.
 4. **Fun before analytics.** Token charts are optional; the memorable moments are the product.
@@ -121,7 +158,8 @@ The ingestion boundary is host-neutral; adding another adapter must end in the s
 6. **Fun score and confidence are different.** A moment can be hilarious while still requiring semantic verification before it is shown as fact.
 7. **No award-specific parser sprawl.** New ideas should first be modeled as an Event, Relation, or Moment composition before adding presentation logic.
 8. **Do not force a Wrapped.** If nothing clears the quality threshold, the report can legitimately contain zero awards.
-9. **Calibrate on people, not synthetic regex wins.** P6 measures pairwise human preference, award keep-rate, and missed moments before a semantic reranker is justified.
+9. **Calibrate on people, not synthetic regex wins.** P6/P7 measure pairwise human preference, award keep-rate, and missed moments before a semantic reranker is justified.
+10. **Human labels must stay attached to the exact candidate set they judged.** P7 fingerprints evaluation cases and invalidates stale reviews after meaningful engine changes.
 
 ## Development
 
@@ -142,12 +180,14 @@ npm run test:award-composer
 npm run test:wrapped
 npm run test:ingest
 npm run test:evaluation
+npm run test:review
 npm run test:p5-p6
+npm run test:p7
 ```
 
 ## Status
 
-🚧 Early prototype. P0–P6 are implemented. The next work is expanding host adapters (Claude Code / Codex), running the P6 harness over a larger real-session corpus, and only then deciding whether an optional semantic reranker is justified by measured failures.
+🚧 Early prototype. P0–P7 are implemented. The next work should be collecting a first real reviewed DSH corpus with P7, inspecting the failure distribution, and using that evidence to decide whether the next engineering step is local calibration, another host adapter, or an optional semantic reranker.
 
 ## License
 
