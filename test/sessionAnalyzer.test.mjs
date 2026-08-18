@@ -42,7 +42,7 @@ test("SessionAnalyzer turns a dramatic DSH session into multiple distinct awards
   );
 
   assert.ok(result.byKind["plot-twist"]);
-  assert.equal(result.byKind["progress-announcement"]?.text, "重大进展！！！");
+  assert.equal(result.byKind["progress-announcement"]?.text, "重大进展！！！现在已经非常接近根因了！");
   assert.equal(result.byKind["emotional-peak"]?.text, "这也太诡异了！！！");
   assert.equal(result.byKind["victory-lap"]?.text, "完美命中！！！");
 
