@@ -133,6 +133,16 @@ function isCodeLike(text: string): boolean {
   return text.length > 24 && syntaxChars / text.length > 0.12;
 }
 
+function shouldMergeDramaticLeadIn(sentence: string): boolean {
+  const bare = sentence.replace(/[.!?。！？…]+$/gu, "").trim();
+  if (bare.length > 24) return false;
+
+  return (
+    /^(?:重大发现|重大突破|等等|等一下|先等等)$/u.test(bare) ||
+    /^(?:wait|hold on|plot twist|found it)$/iu.test(bare)
+  );
+}
+
 function splitIntoSentenceLikeUnits(text: string): string[] {
   const normalized = text.replace(/\r\n?/gu, "\n");
   const units: string[] = [];
@@ -149,9 +159,22 @@ function splitIntoSentenceLikeUnits(text: string): string[] {
       continue;
     }
 
-    for (const match of matches) {
-      const sentence = match.trim();
-      if (sentence) units.push(sentence);
+    for (let index = 0; index < matches.length; index += 1) {
+      const sentence = matches[index]?.trim();
+      if (!sentence) continue;
+
+      if (shouldMergeDramaticLeadIn(sentence) && index + 1 < matches.length) {
+        const next = matches[index + 1]?.trim();
+        if (next) {
+          const bare = sentence.replace(/[.!?。！？…]+$/gu, "").trim();
+          const spacer = /\p{Script=Han}$/u.test(bare) ? "" : " ";
+          units.push(`${sentence}${spacer}${next}`);
+          index += 1;
+          continue;
+        }
+      }
+
+      units.push(sentence);
     }
   }
 
