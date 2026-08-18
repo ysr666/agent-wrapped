@@ -1,11 +1,15 @@
-import { detectBoomerangs } from "./boomerangDetector.js";
-import {
-  clusterCatchphraseCandidates,
-  type CatchphraseCluster,
-} from "./catchphraseClusterer.js";
 import { scoreQuoteFacets, type QuoteFacetScores } from "./facetScorer.js";
-import { rankQuoteCandidates } from "./quoteScorer.js";
 import type { TranscriptMessage } from "./types.js";
+import {
+  buildMomentGraph,
+  eventMap,
+  relationsOfType,
+} from "../graph/momentGraph.js";
+import {
+  clusterRepetitionEvents,
+  type RepetitionCluster,
+} from "../graph/repetition.js";
+import type { MomentGraph, MomentRelation } from "../graph/types.js";
 
 export type SessionAwardKind =
   | "quote"
@@ -19,6 +23,7 @@ export type SessionAwardKind =
   | "victory-lap";
 
 export interface SessionCandidate {
+  eventId: string;
   text: string;
   messageIndex: number;
   repetitionCount: number;
@@ -91,10 +96,6 @@ function normalizeForGrouping(text: string): string {
     .trim();
 }
 
-function memberKey(text: string, messageIndex: number): string {
-  return `${messageIndex}\u0000${normalizeForGrouping(text)}`;
-}
-
 function uniqueSorted(values: number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
 }
@@ -118,43 +119,25 @@ function makeAward(
   };
 }
 
-function clusterCandidates(candidates: Array<{ text: string; messageIndex: number }>, minCount = 1): CatchphraseCluster[] {
-  return clusterCatchphraseCandidates(candidates, {
-    minCount,
-    fuzzy: true,
-  });
-}
-
-function buildCandidates(messages: TranscriptMessage[]): SessionCandidate[] {
-  // Reuse QuoteScorer's sentence-like extraction instead of maintaining a second
-  // tokenizer. We request every candidate and do the session-level scoring here.
-  const extracted = rankQuoteCandidates(messages, {
-    limit: Math.max(256, messages.length * 32),
-    minScore: 0,
-    penalizeRepetition: false,
-  });
-
-  // Repetition is cluster-aware: paraphrases such as “问题已经很明确了” and
-  // “这下问题非常清楚了” can count as the same verbal tic.
-  const clusters = clusterCandidates(
-    extracted.map((candidate) => ({ text: candidate.text, messageIndex: candidate.messageIndex })),
-  );
+function buildCandidates(graph: MomentGraph): SessionCandidate[] {
+  const clusters = clusterRepetitionEvents(graph.events, graph.relations, 1);
   const repetitionCounts = new Map<string, number>();
   for (const cluster of clusters) {
-    for (const member of cluster.members) {
-      repetitionCounts.set(memberKey(member.text, member.messageIndex), cluster.count);
-    }
+    for (const eventId of cluster.eventIds) repetitionCounts.set(eventId, cluster.count);
   }
 
-  return extracted.map((candidate) => {
-    const repetitionCount = repetitionCounts.get(memberKey(candidate.text, candidate.messageIndex)) ?? 1;
-    return {
-      text: candidate.text,
-      messageIndex: candidate.messageIndex,
-      repetitionCount,
-      facets: scoreQuoteFacets(candidate.text, repetitionCount),
-    };
-  });
+  return graph.events
+    .filter((event) => event.text.length >= 4)
+    .map((event) => {
+      const repetitionCount = repetitionCounts.get(event.id) ?? 1;
+      return {
+        eventId: event.id,
+        text: event.text,
+        messageIndex: event.messageIndex,
+        repetitionCount,
+        facets: scoreQuoteFacets(event.text, repetitionCount),
+      };
+    });
 }
 
 function sortByFacet(
@@ -179,8 +162,8 @@ function pickFacetCandidate(
   const best = ranked[0];
   if (!best) return undefined;
 
-  // A Wrapped recap is more fun when one spectacular sentence does not occupy
-  // every category. Prefer a different line when it is at least 80% as strong.
+  // The legacy recap is more fun when one spectacular sentence does not occupy
+  // every category. P3/P3.5 will replace this with Moment ranking/composition.
   const diverse = ranked.find(
     (candidate) =>
       !usedTexts.has(normalizeForGrouping(candidate.text)) &&
@@ -190,31 +173,24 @@ function pickFacetCandidate(
   return diverse ?? best;
 }
 
-function findCandidateForMember(
+function findCandidateForEvent(
   candidates: SessionCandidate[],
-  text: string,
-  messageIndex: number,
+  eventId: string,
 ): SessionCandidate | undefined {
-  return candidates.find(
-    (candidate) =>
-      candidate.messageIndex === messageIndex &&
-      normalizeForGrouping(candidate.text) === normalizeForGrouping(text),
-  );
+  return candidates.find((candidate) => candidate.eventId === eventId);
 }
 
-function findCatchphrase(
+function rankCatchphraseClusters(
+  graph: MomentGraph,
   candidates: SessionCandidate[],
   minCount: number,
-): SessionAward | undefined {
-  const clusters = clusterCandidates(candidates, minCount);
-  if (clusters.length === 0) return undefined;
-
-  const ranked = clusters
+): Array<{ cluster: RepetitionCluster; representative: SessionCandidate; score: number }> {
+  return clusterRepetitionEvents(graph.events, graph.relations, minCount)
     .map((cluster) => {
-      const memberCandidates = cluster.members
-        .map((member) => findCandidateForMember(candidates, member.text, member.messageIndex))
+      const memberCandidates = cluster.eventIds
+        .map((eventId) => findCandidateForEvent(candidates, eventId))
         .filter((candidate): candidate is SessionCandidate => Boolean(candidate));
-      const representative = memberCandidates.sort(
+      const representative = [...memberCandidates].sort(
         (a, b) => b.facets.drama - a.facets.drama || b.facets.quote - a.facets.quote || a.messageIndex - b.messageIndex,
       )[0];
       const baseScore = Math.max(0, ...memberCandidates.map((candidate) => candidate.facets.catchphrase));
@@ -222,7 +198,7 @@ function findCatchphrase(
       return { cluster, representative, score };
     })
     .filter(
-      (entry): entry is { cluster: CatchphraseCluster; representative: SessionCandidate; score: number } =>
+      (entry): entry is { cluster: RepetitionCluster; representative: SessionCandidate; score: number } =>
         Boolean(entry.representative),
     )
     .sort(
@@ -230,10 +206,16 @@ function findCatchphrase(
         b.score - a.score ||
         b.cluster.count - a.cluster.count ||
         b.cluster.confidence - a.cluster.confidence ||
-        a.cluster.messageIndexes[0]! - b.cluster.messageIndexes[0]!,
+        (a.cluster.messageIndexes[0] ?? 0) - (b.cluster.messageIndexes[0] ?? 0),
     );
+}
 
-  const winner = ranked[0];
+function findCatchphrase(
+  graph: MomentGraph,
+  candidates: SessionCandidate[],
+  minCount: number,
+): SessionAward | undefined {
+  const winner = rankCatchphraseClusters(graph, candidates, minCount)[0];
   if (!winner) return undefined;
 
   return makeAward("catchphrase", winner.representative, winner.score, {
@@ -246,6 +228,7 @@ function findCatchphrase(
 }
 
 function findWolfCry(
+  graph: MomentGraph,
   candidates: SessionCandidate[],
   minDeclarations: number,
 ): SessionAward | undefined {
@@ -263,10 +246,13 @@ function findWolfCry(
 
   const bestDiscovery = Math.max(...declarations.map((candidate) => candidate.facets.discovery));
   const score = bestDiscovery * 0.55 + Math.min(45, declarations.length * 10);
-
-  const rootCauseCluster = clusterCandidates(declarations, 1).sort(
-    (a, b) => b.count - a.count || b.confidence - a.confidence,
-  )[0];
+  const declarationIds = new Set(declarations.map((candidate) => candidate.eventId));
+  const declarationEvents = graph.events.filter((event) => declarationIds.has(event.id));
+  const rootCauseCluster = clusterRepetitionEvents(
+    declarationEvents,
+    graph.relations,
+    1,
+  ).sort((a, b) => b.count - a.count || b.confidence - a.confidence)[0];
 
   return makeAward("wolf-cry", representative, score, {
     count: declarations.length,
@@ -276,43 +262,58 @@ function findWolfCry(
   });
 }
 
+function strongestRelation(
+  relations: MomentRelation[],
+): MomentRelation | undefined {
+  return [...relations].sort(
+    (a, b) =>
+      b.strength - a.strength ||
+      b.confidence - a.confidence ||
+      a.distance - b.distance,
+  )[0];
+}
+
 function findPrematureCelebration(
+  graph: MomentGraph,
   candidates: SessionCandidate[],
-  contextWindowMessages: number,
 ): SessionAward | undefined {
-  const chronological = [...candidates].sort((a, b) => a.messageIndex - b.messageIndex);
-  let best:
-    | {
-        before: SessionCandidate;
-        after: SessionCandidate;
-        score: number;
-      }
-    | undefined;
+  const relation = strongestRelation(relationsOfType(graph, "celebrates_before"));
+  if (!relation) return undefined;
+  const before = findCandidateForEvent(candidates, relation.fromEventId);
+  const after = findCandidateForEvent(candidates, relation.toEventId);
+  if (!before || !after) return undefined;
 
-  for (const before of chronological) {
-    if (before.facets.celebration < 50) continue;
-
-    for (const after of chronological) {
-      const distance = after.messageIndex - before.messageIndex;
-      if (distance <= 0 || distance > contextWindowMessages) continue;
-      if (after.facets.reversal < 50) continue;
-
-      const closenessBonus = Math.max(0, contextWindowMessages - distance) * 1.2;
-      const score = before.facets.celebration * 0.42 + after.facets.reversal * 0.48 + closenessBonus;
-
-      if (!best || score > best.score) {
-        best = { before, after, score };
-      }
-    }
-  }
-
-  if (!best) return undefined;
-
-  return makeAward("premature-celebration", best.before, best.score, {
-    messageIndexes: [best.before.messageIndex, best.after.messageIndex],
-    relatedText: best.after.text,
-    relatedMessageIndex: best.after.messageIndex,
+  return makeAward("premature-celebration", before, relation.strength, {
+    messageIndexes: [before.messageIndex, after.messageIndex],
+    relatedText: after.text,
+    relatedMessageIndex: after.messageIndex,
+    reasons: relation.reasons,
   });
+}
+
+function findBoomerang(
+  graph: MomentGraph,
+  candidates: SessionCandidate[],
+): SessionAward | undefined {
+  const relation = strongestRelation(relationsOfType(graph, "contradicts"));
+  if (!relation) return undefined;
+  const before = findCandidateForEvent(candidates, relation.fromEventId);
+  const after = findCandidateForEvent(candidates, relation.toEventId);
+  if (!before || !after) return undefined;
+  const meta = AWARD_META.boomerang;
+
+  return {
+    kind: "boomerang",
+    title: meta.title,
+    emoji: meta.emoji,
+    score: relation.strength,
+    text: before.text,
+    relatedText: after.text,
+    relatedMessageIndex: after.messageIndex,
+    messageIndexes: [before.messageIndex, after.messageIndex],
+    topic: relation.topicLabel,
+    reasons: relation.reasons,
+  };
 }
 
 export function analyzeSession(
@@ -323,12 +324,13 @@ export function analyzeSession(
   const minWolfCryDeclarations = options.minWolfCryDeclarations ?? 2;
   const contextWindowMessages = options.contextWindowMessages ?? 18;
   const boomerangWindowMessages = options.boomerangWindowMessages ?? 120;
-  const candidates = buildCandidates(messages);
-  const boomerangs = detectBoomerangs(messages, {
+  const graph = buildMomentGraph(messages, {
+    celebrationWindowMessages: contextWindowMessages,
     maxMessageDistance: boomerangWindowMessages,
-    minScore: 45,
-    limit: Math.max(100, messages.length * 4),
+    fuzzyRepetition: true,
   });
+  const candidates = buildCandidates(graph);
+  const contradictions = relationsOfType(graph, "contradicts");
 
   const awards: SessionAward[] = [];
   const byKind: Partial<Record<SessionAwardKind, SessionAward>> = {};
@@ -344,45 +346,19 @@ export function analyzeSession(
   const quote = pickFacetCandidate(candidates, "quote", 12, usedTexts);
   addAward(quote ? makeAward("quote", quote, quote.facets.quote) : undefined);
 
-  const catchphrase = findCatchphrase(candidates, minCatchphraseCount);
-  addAward(catchphrase);
+  addAward(findCatchphrase(graph, candidates, minCatchphraseCount));
+  addAward(findWolfCry(graph, candidates, minWolfCryDeclarations));
 
-  const wolfCry = findWolfCry(candidates, minWolfCryDeclarations);
-  addAward(wolfCry);
-
-  // Boomerang is a pair award, so it may intentionally reuse a line that also
-  // appears as the quote or plot-twist card. The before→after relationship is
-  // the entertainment value here, not a standalone sentence.
-  const boomerang = boomerangs[0];
-  if (boomerang) {
-    const meta = AWARD_META.boomerang;
-    addAward(
-      {
-        kind: "boomerang",
-        title: meta.title,
-        emoji: meta.emoji,
-        score: boomerang.score,
-        text: boomerang.beforeText,
-        relatedText: boomerang.afterText,
-        relatedMessageIndex: boomerang.afterMessageIndex,
-        messageIndexes: [boomerang.beforeMessageIndex, boomerang.afterMessageIndex],
-        topic: boomerang.topicLabel,
-        reasons: boomerang.reasons,
-      },
-      false,
-    );
-  }
-
-  const prematureCelebration = findPrematureCelebration(candidates, contextWindowMessages);
-  addAward(prematureCelebration);
+  // Pair awards may intentionally reuse a line. Their value comes from the
+  // before→after graph relation rather than the standalone sentence.
+  addAward(findBoomerang(graph, candidates), false);
+  addAward(findPrematureCelebration(graph, candidates), false);
 
   const plotTwist = pickFacetCandidate(candidates, "reversal", 50, usedTexts);
   addAward(
     plotTwist ? makeAward("plot-twist", plotTwist, plotTwist.facets.reversal) : undefined,
   );
 
-  // Reserve strong progress narration before selecting the general emotional
-  // peak, otherwise a line like “重大进展！！！” can occupy both cards.
   const progress = pickFacetCandidate(candidates, "progress", 50, usedTexts);
   addAward(
     progress ? makeAward("progress-announcement", progress, progress.facets.progress) : undefined,
@@ -398,7 +374,11 @@ export function analyzeSession(
     victoryLap ? makeAward("victory-lap", victoryLap, victoryLap.facets.celebration) : undefined,
   );
 
-  const repeatedPhraseGroups = clusterCandidates(candidates, minCatchphraseCount).length;
+  const repeatedPhraseGroups = clusterRepetitionEvents(
+    graph.events,
+    graph.relations,
+    minCatchphraseCount,
+  ).length;
 
   return {
     awards,
@@ -409,7 +389,7 @@ export function analyzeSession(
       repeatedPhraseGroups,
       discoveryDeclarations: candidates.filter((candidate) => candidate.facets.discovery >= 55).length,
       reversalMoments: candidates.filter((candidate) => candidate.facets.reversal >= 50).length,
-      boomerangMoments: boomerangs.length,
+      boomerangMoments: contradictions.length,
       progressAnnouncements: candidates.filter((candidate) => candidate.facets.progress >= 50).length,
       celebrationMoments: candidates.filter((candidate) => candidate.facets.celebration >= 50).length,
     },
