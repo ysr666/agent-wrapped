@@ -13,7 +13,10 @@
     "test:catchphrase": "npm run build && node --test test/catchphraseClusterer.test.mjs",
     "test:boomerang": "npm run build && node --test test/boomerangDetector.test.mjs",
     "test:event": "npm run build && node --test test/eventExtractor.test.mjs",
-    "test:graph": "npm run build && node --test test/momentGraph.test.mjs"
+    "test:graph": "npm run build && node --test test/momentGraph.test.mjs",
+    "test:moment-builder": "npm run build && node --test test/momentBuilder.test.mjs",
+    "test:moment-ranker": "npm run build && node --test test/momentRanker.test.mjs",
+    "test:moments": "npm run build && node --test test/momentBuilder.test.mjs test/momentRanker.test.mjs"
   },
   "engines": {
     "node": ">=20"
