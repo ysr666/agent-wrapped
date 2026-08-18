@@ -1,3 +1,4 @@
+import { detectBoomerangs } from "./boomerangDetector.js";
 import {
   clusterCatchphraseCandidates,
   type CatchphraseCluster,
@@ -10,6 +11,7 @@ export type SessionAwardKind =
   | "quote"
   | "catchphrase"
   | "wolf-cry"
+  | "boomerang"
   | "premature-celebration"
   | "plot-twist"
   | "emotional-peak"
@@ -35,6 +37,8 @@ export interface SessionAward {
   clusterFamily?: string;
   relatedText?: string;
   relatedMessageIndex?: number;
+  topic?: string;
+  reasons?: string[];
   facets?: QuoteFacetScores;
 }
 
@@ -44,6 +48,7 @@ export interface SessionMetrics {
   repeatedPhraseGroups: number;
   discoveryDeclarations: number;
   reversalMoments: number;
+  boomerangMoments: number;
   progressAnnouncements: number;
   celebrationMoments: number;
 }
@@ -58,12 +63,14 @@ export interface SessionAnalyzerOptions {
   minCatchphraseCount?: number;
   minWolfCryDeclarations?: number;
   contextWindowMessages?: number;
+  boomerangWindowMessages?: number;
 }
 
 const AWARD_META: Record<SessionAwardKind, { title: string; emoji: string }> = {
   quote: { title: "Quote of the session", emoji: "🏆" },
   catchphrase: { title: "Catchphrase", emoji: "📢" },
   "wolf-cry": { title: "Called it too early", emoji: "🐺" },
+  boomerang: { title: "Biggest boomerang", emoji: "🤡" },
   "premature-celebration": { title: "Premature celebration", emoji: "🍾" },
   "plot-twist": { title: "Plot twist", emoji: "🧠" },
   "emotional-peak": { title: "Emotional peak", emoji: "😱" },
@@ -315,7 +322,13 @@ export function analyzeSession(
   const minCatchphraseCount = options.minCatchphraseCount ?? 2;
   const minWolfCryDeclarations = options.minWolfCryDeclarations ?? 2;
   const contextWindowMessages = options.contextWindowMessages ?? 18;
+  const boomerangWindowMessages = options.boomerangWindowMessages ?? 120;
   const candidates = buildCandidates(messages);
+  const boomerangs = detectBoomerangs(messages, {
+    maxMessageDistance: boomerangWindowMessages,
+    minScore: 45,
+    limit: Math.max(100, messages.length * 4),
+  });
 
   const awards: SessionAward[] = [];
   const byKind: Partial<Record<SessionAwardKind, SessionAward>> = {};
@@ -336,6 +349,29 @@ export function analyzeSession(
 
   const wolfCry = findWolfCry(candidates, minWolfCryDeclarations);
   addAward(wolfCry);
+
+  // Boomerang is a pair award, so it may intentionally reuse a line that also
+  // appears as the quote or plot-twist card. The before→after relationship is
+  // the entertainment value here, not a standalone sentence.
+  const boomerang = boomerangs[0];
+  if (boomerang) {
+    const meta = AWARD_META.boomerang;
+    addAward(
+      {
+        kind: "boomerang",
+        title: meta.title,
+        emoji: meta.emoji,
+        score: boomerang.score,
+        text: boomerang.beforeText,
+        relatedText: boomerang.afterText,
+        relatedMessageIndex: boomerang.afterMessageIndex,
+        messageIndexes: [boomerang.beforeMessageIndex, boomerang.afterMessageIndex],
+        topic: boomerang.topicLabel,
+        reasons: boomerang.reasons,
+      },
+      false,
+    );
+  }
 
   const prematureCelebration = findPrematureCelebration(candidates, contextWindowMessages);
   addAward(prematureCelebration);
@@ -373,6 +409,7 @@ export function analyzeSession(
       repeatedPhraseGroups,
       discoveryDeclarations: candidates.filter((candidate) => candidate.facets.discovery >= 55).length,
       reversalMoments: candidates.filter((candidate) => candidate.facets.reversal >= 50).length,
+      boomerangMoments: boomerangs.length,
       progressAnnouncements: candidates.filter((candidate) => candidate.facets.progress >= 50).length,
       celebrationMoments: candidates.filter((candidate) => candidate.facets.celebration >= 50).length,
     },
