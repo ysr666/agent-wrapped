@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { rankQuoteCandidates, scoreQuote } from "../dist/core/quoteScorer.js";
+import { hardNegativeBenchmarks } from "./fixtures/hardNegativeBenchmarks.mjs";
 import { publicQuoteBenchmarks } from "./fixtures/publicQuoteBenchmarks.mjs";
 
 for (const benchmark of publicQuoteBenchmarks) {
@@ -32,6 +33,26 @@ for (const benchmark of publicQuoteBenchmarks) {
       assert.ok(
         winner.score > lower.score,
         `expected ${JSON.stringify(winner.text)} (${winner.score}) to outrank ${JSON.stringify(lower.text)} (${lower.score})`,
+      );
+    }
+  });
+}
+
+for (const benchmark of hardNegativeBenchmarks) {
+  test(`hard negative benchmark: ${benchmark.id}`, () => {
+    const gold = scoreQuote(benchmark.gold);
+
+    for (const negativeText of benchmark.negatives) {
+      const negative = scoreQuote(negativeText);
+      assert.ok(
+        gold.score > negative.score,
+        [
+          `hard negative beat or tied the intended quote in ${benchmark.id}`,
+          `gold: ${JSON.stringify(gold.text)} (${gold.score})`,
+          `negative: ${JSON.stringify(negative.text)} (${negative.score})`,
+          `gold signals: ${JSON.stringify(gold.signals)}`,
+          `negative signals: ${JSON.stringify(negative.signals)}`,
+        ].join("\n"),
       );
     }
   });
