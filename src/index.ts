@@ -24,3 +24,10 @@ export * from "./wrapped/types.js";
 export * from "./wrapped/wrappedReport.js";
 export * from "./wrapped/renderer.js";
 export * from "./wrapped/preference.js";
+
+export * from "./ingest/types.js";
+export * from "./ingest/dsh.js";
+export * from "./ingest/dshFilesystem.js";
+export * from "./evaluation/types.js";
+export * from "./evaluation/benchmark.js";
+export * from "./evaluation/localDsh.js";

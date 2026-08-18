@@ -18,12 +18,16 @@
     "test:moment-ranker": "npm run build && node --test test/momentRanker.test.mjs",
     "test:award-composer": "npm run build && node --test test/awardComposer.test.mjs",
     "test:wrapped": "npm run build && node --test test/wrappedReport.test.mjs",
-    "test:moments": "npm run build && node --test test/momentBuilder.test.mjs test/momentRanker.test.mjs test/awardComposer.test.mjs test/wrappedReport.test.mjs"
+    "test:ingest": "npm run build && node --test test/dshIngest.test.mjs",
+    "test:evaluation": "npm run build && node --test test/evaluationBenchmark.test.mjs",
+    "test:moments": "npm run build && node --test test/momentBuilder.test.mjs test/momentRanker.test.mjs test/awardComposer.test.mjs test/wrappedReport.test.mjs",
+    "test:p5-p6": "npm run build && node --test test/dshIngest.test.mjs test/evaluationBenchmark.test.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
+    "@types/node": "^22.20.0",
     "typescript": "^5.9.0"
   }
 }
