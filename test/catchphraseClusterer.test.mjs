@@ -66,11 +66,12 @@ test("keeps opposite clarity polarity out of the same family", () => {
     item("The problem is not clear yet.", 3),
   ], { minCount: 1 });
 
-  const families = clusters.map((cluster) => cluster.family);
-  assert.ok(families.includes("clarity:positive"));
-  assert.ok(families.includes("clarity:negative"));
-  assert.equal(clusters.filter((cluster) => cluster.family === "clarity:positive").length, 2);
-  assert.equal(clusters.filter((cluster) => cluster.family === "clarity:negative").length, 2);
+  const positive = clusters.find((cluster) => cluster.family === "clarity:positive");
+  const negative = clusters.find((cluster) => cluster.family === "clarity:negative");
+  assert.ok(positive);
+  assert.ok(negative);
+  assert.equal(positive.count, 2);
+  assert.equal(negative.count, 2);
 });
 
 test("conservative fuzzy matching merges near duplicates outside known families", () => {
