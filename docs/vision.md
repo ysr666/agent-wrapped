@@ -8,21 +8,17 @@ Make an awards show out of AI coding sessions.
 
 Agent Wrapped extracts the funniest, most dramatic, and most repeated moments from AI-agent transcripts.
 
-The core categories are deliberately different from ordinary session analytics:
+The product is **moment-first, award-second**. “Quote”, “catchphrase”, “boomerang”, and “wolf cry” are presentation choices for interesting session moments, not separate definitions of how the transcript should be understood.
 
-### 1. Memorable quote
+## Core experience
+
+### Memorable quote
 A one-off line with strong dramatic or comedic value.
-
-Example:
 
 > “Major discovery!!! Our whole approach was wrong!”
 
-Frequency is not required. A quote can win because it has a strong reversal, surprise, emotional spike, or absurd level of confidence.
-
-### 2. Catchphrase
+### Catchphrase
 A phrase or sentence pattern that repeats enough to feel like the agent’s verbal tic.
-
-Examples:
 
 - “Now the problem is very clear.” × 9
 - “Wait…” × 14
@@ -30,89 +26,116 @@ Examples:
 
 Near-duplicate wording should be clustered rather than counted separately.
 
-### 3. Boomerang
+### Boomerang
 Two statements from the same session that form a funny or striking contradiction.
-
-Example:
 
 > 21:06 — “We can rule out caching.”
 >
 > 21:48 — “The root cause is caching.”
 
-### 4. Called-it-too-early moment
+### Called-it-too-early moment
 Repeated declarations that the issue is solved, understood, or traced to a root cause before the session actually converges.
 
-### 5. Plot twist
+### Plot twist
 A sudden change in direction, especially when the agent explicitly retracts or overturns an earlier assumption.
 
-### 6. Emotional peak / celebration
-Short lines such as “离谱！！！”, “完美命中！！！”, or “这次应该真的没问题了！” may be entertaining even when they are not the best standalone quote. They should remain eligible for emotional-peak, celebration, or premature-victory awards.
+### Emotional peak / celebration
+Short lines such as “离谱！！！”, “完美命中！！！”, or “这次应该真的没问题了！” may be entertaining even when they are not the best standalone quote.
 
-## Fun-first scoring principle
+## Fun-first principle
 
 **Not the quote-of-the-session winner does not mean not interesting.**
 
-Agent Wrapped should not collapse every line into a single good/bad score. A sentence can be weak in one dimension and excellent in another:
+A sentence can be weak in one dimension and excellent in another. Repetition, later context, contradiction, or a spectacular self-own can turn an ordinary-looking line into the best moment of the session.
 
-```text
-“现在问题已经非常明确了。”
-quote: medium/low
-catchphrase: very high when repeated
+This means the system must preserve two different questions:
 
-“这次真的找到根因了！！！”
-quote: medium/high
-discovery: high
-wolf-cried-again: extremely high when repeated
+- **How entertaining is this moment?**
+- **How confident are we that we understood it correctly?**
 
-“完美命中！！！”
-quote: medium
-celebration: high
-emotional peak: high
-
-“重大发现！！！我们前面的路线完全错了！”
-quote: very high
-discovery: high
-reversal: very high
-drama: very high
-```
-
-The current local prototype therefore treats quote ranking as only one facet. Other candidate facets include drama, discovery, reversal, progress, celebration, catchphrase, and repeated root-cause / wolf-cry potential.
-
-Final awards should be decided from the whole session, not by throwing away lines that fail to win one ranking.
+`funScore` and extraction/relation confidence should remain separate throughout the architecture.
 
 ## MVP boundary
 
-The first prototype should **not** try to become a full telemetry dashboard.
+The prototype should **not** become a telemetry or productivity dashboard.
 
 It should answer three questions well:
 
-1. What was the funniest / most dramatic line in this session?
+1. What moment is most worth quoting from this session?
 2. What did the agent keep saying?
-3. What was the biggest reversal?
+3. What was the biggest reversal / self-own?
 
-Then it can add lightweight side awards such as emotional peak, premature celebration, and wolf-cried-again without turning into a productivity dashboard.
+Lightweight side moments such as emotional peaks, false dawns, and repeated root-cause declarations are welcome when they are genuinely strong.
 
-## Extraction strategy
+## Moment Engine
 
-Start local and deterministic:
+The analysis core follows this direction:
 
-1. Normalize transcript messages.
-2. Split exposed assistant text into sentence-like units.
-3. Extract repeated n-grams / sentence patterns for catchphrases.
-4. Score quote candidates using signals such as:
-   - exclamation / punctuation intensity
-   - reversal language
-   - surprise / discovery language
-   - explicit self-correction
-   - unusual wording
-   - confidence markers
-5. Keep additional fun-category facets instead of discarding non-winning lines.
-6. Detect contradiction candidates between nearby or semantically related claims.
-7. Optionally allow an LLM reranker later, but do not require it for the default experience.
+```text
+Transcript
+   ↓
+UnitExtractor
+   ↓
+EventExtractor
+   ↓
+Event[]
+   ↓
+MomentGraph
+   ├─ repeats / similar_to
+   ├─ same_topic
+   ├─ contradicts / retracts
+   ├─ followed_by
+   └─ celebrates_before
+   ↓
+MomentBuilder
+   ↓
+MomentRanker
+   ↓
+optional semantic rerank
+   ↓
+AwardComposer
+   ↓
+🎬 Agent Wrapped
+```
+
+The important separation is:
+
+- **Event** — what happened in one transcript unit;
+- **Relation** — how two events relate;
+- **Moment** — why one or more events are worth revisiting;
+- **Award** — how that moment is presented to the user.
+
+P0 (`EventExtractor`) and P1 (`MomentGraph`) are now the foundation. Existing QuoteScorer / CatchphraseClusterer / BoomerangDetector APIs remain as compatibility surfaces while their semantic logic moves underneath them.
+
+## Local-first strategy
+
+Local-first does not mean local-only.
+
+The default local engine should reduce a long private transcript to a small set of high-recall structured events and moment candidates. A later optional semantic layer can rerank or resolve ambiguous candidates without uploading the full transcript.
+
+Target flow:
+
+```text
+large transcript
+  ↓ local
+structured events + graph
+  ↓ local
+small Moment candidate set
+  ↓ optional
+local embedding / small model / opt-in LLM director
+```
+
+An LLM should be a quality upgrade for ambiguous semantics and final taste, not a requirement for basic operation.
+
+## Model / host boundary
+
+The core event and relation definitions are host-agnostic.
+
+DeepSeek/DSH, Claude Code, Codex, and other runtimes can have calibration profiles or lexical priors, but the core must not encode assumptions such as “DeepSeek always talks like X”. Style depends on model, harness, version, system prompt, and user behavior together.
 
 ## Output concept
 
-A single session could end with:
+A single session might end with only the strongest 4–7 moments rather than forcing every possible award:
 
 > ## 🎬 Tonight’s Agent Wrapped
 >
@@ -125,14 +148,13 @@ A single session could end with:
 > **🤡 Biggest boomerang**  
 > “Definitely not caching.” → “The root cause is caching.”
 >
-> **🐺 Root cause declarations**  
-> 7
+> **🐺 Called it too early**  
+> Root-cause declarations: 7
 >
-> **🍾 Earliest victory lap**  
-> “This should be fixed now.”
->
-> **😱 Emotional peak**  
-> “这也太诡异了！！！”
+> **🍾 Premature celebration**  
+> “This should be fixed now.” → “Wait, no…”
+
+Award titles may eventually become dynamic when that produces a better joke than a fixed label.
 
 ## Privacy boundary
 
@@ -140,4 +162,4 @@ Agent Wrapped only analyzes transcript content exposed by the host runtime or ex
 
 ## Long-term direction
 
-Keep the analysis core host-agnostic so the same engine can eventually compare DSH, Claude Code, Codex, and other agent runtimes in weekly / monthly / yearly Wrapped reports.
+Keep the analysis core host-agnostic so the same engine can eventually produce weekly / monthly / yearly Wrapped reports and compare recurring behavior across DSH, Claude Code, Codex, and other agent runtimes.
