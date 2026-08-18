@@ -4,9 +4,12 @@ QuoteScorer v0 has a small regression benchmark so scoring changes are judged ag
 
 ## What is in the benchmark
 
-The executable corpus lives in `test/fixtures/publicQuoteBenchmarks.mjs`.
+The executable corpus is split into two fixture sets:
 
-It currently covers:
+- `test/fixtures/publicQuoteBenchmarks.mjs` — source-inspired positive/regression cases
+- `test/fixtures/hardNegativeBenchmarks.mjs` — deliberately misleading lines that look quote-worthy on the surface
+
+The positive corpus currently covers:
 
 - Claude Code: explicit self-correction / reversal after a confident diagnosis
 - Codex: repeated "exact defect" style discovery claims versus a later retraction
@@ -17,15 +20,39 @@ The public cases are **source-inspired regression cases**, not copied transcript
 
 Public source notes are collected in `docs/research-corpus.md`.
 
+## Hard negatives
+
+Hard negatives are intentionally plausible false winners. They contain the kinds of surface features a naive scorer may overvalue:
+
+- lots of `!!!` / `！！！` without a meaningful event;
+- celebratory filler such as "Great news" / "终于修好了";
+- confident root-cause claims with no reversal or payoff;
+- bare apologies that acknowledge an error but say nothing memorable;
+- trigger-word stuffing such as "root cause", "exact issue", "重大突破", and "完全确定" packed into one line.
+
+Each hard-negative case has one intended quote and several tempting decoys. The test asserts that the intended quote outranks every decoy.
+
+The current v0 hard-negative corpus includes both Chinese and English cases for:
+
+1. punctuation bait;
+2. confidence bait;
+3. generic resolution/completion language;
+4. apology bait;
+5. keyword stuffing.
+
+These cases are deliberately limited to distinctions that the local surface scorer can reasonably make. Subtle semantic twists whose value only appears after comparing distant context belong to the later context/semantic benchmark rather than being faked with regex expectations.
+
 ## What the tests assert
 
 The tests intentionally assert **relative ranking**, not fixed numeric scores.
 
-For each benchmark, QuoteScorer must:
+For each positive benchmark, QuoteScorer must:
 
 1. extract the expected dramatic line;
 2. rank it first within that mini-session;
 3. rank it above generic discovery/status lines from the same case.
+
+For each hard-negative benchmark, the intended quote must score higher than every tempting decoy.
 
 Additional guardrails verify that:
 
@@ -55,7 +82,7 @@ This is a regression suite, not a scientific model leaderboard.
 
 A future scorer should be allowed to change raw scores as long as the important orderings stay correct. When real DSH transcripts are added, they should be anonymized or represented by minimal derived fixtures unless the original text is intentionally public.
 
-Over time we should add three kinds of cases:
+Over time we should maintain three kinds of cases:
 
 - **positive**: obvious memorable quotes that should rank highly;
 - **hard negatives**: emotional or confident lines that look dramatic but should not win;
