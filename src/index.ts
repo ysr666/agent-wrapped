@@ -30,3 +30,4 @@ export * from "./ingest/dsh.js";
 export * from "./ingest/dshFilesystem.js";
 export * from "./evaluation/types.js";
 export * from "./evaluation/benchmark.js";
+export * from "./evaluation/localDsh.js";
