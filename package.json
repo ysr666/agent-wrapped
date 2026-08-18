@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test",
+    "test:quote": "npm run build && node --test test/quoteScorer.test.mjs"
   },
   "engines": {
     "node": ">=20"
