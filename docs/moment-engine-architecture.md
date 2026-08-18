@@ -327,6 +327,8 @@ P3 tests verify that:
 - correction arcs gain value from context rather than only one sentence;
 - `analyzeMoments()` returns descending ranked Moments.
 
+The repository CI runs both `npm run check` and the complete `npm test` suite, so P2/P3 regressions are validated together with the legacy compatibility tests rather than in isolation.
+
 ---
 
 # Architectural boundary after P3
