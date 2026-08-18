@@ -9,7 +9,8 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test",
     "test:quote": "npm run build && node --test test/quoteScorer.test.mjs",
-    "test:session": "npm run build && node --test test/sessionAnalyzer.test.mjs"
+    "test:session": "npm run build && node --test test/sessionAnalyzer.test.mjs",
+    "test:catchphrase": "npm run build && node --test test/catchphraseClusterer.test.mjs"
   },
   "engines": {
     "node": ">=20"
