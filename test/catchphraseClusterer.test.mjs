@@ -40,14 +40,37 @@ test("clusters root-cause declarations even when wording changes", () => {
   assert.equal(clusters[0].family, "root-cause-found:positive");
 });
 
+test("clusters common Claude/Codex-style English verbal tics", () => {
+  const waitClusters = clusterCatchphraseCandidates([
+    item("Wait, I see the problem now.", 0),
+    item("Hold on — the issue is different than I thought.", 4),
+  ], { minCount: 2 });
+
+  assert.equal(waitClusters.length, 1);
+  assert.equal(waitClusters[0].family, "wait-reset:positive");
+
+  const rootCauseClusters = clusterCatchphraseCandidates([
+    item("I found the root cause!", 0),
+    item("Root cause confirmed: state reset.", 3),
+  ], { minCount: 2 });
+
+  assert.equal(rootCauseClusters.length, 1);
+  assert.equal(rootCauseClusters[0].family, "root-cause-found:positive");
+});
+
 test("keeps opposite clarity polarity out of the same family", () => {
   const clusters = clusterCatchphraseCandidates([
     item("现在问题已经很明确了。", 0),
     item("现在问题还不明确。", 1),
+    item("The problem is clear now.", 2),
+    item("The problem is not clear yet.", 3),
   ], { minCount: 1 });
 
-  assert.equal(clusters.length, 2);
-  assert.notEqual(clusters[0].family, clusters[1].family);
+  const families = clusters.map((cluster) => cluster.family);
+  assert.ok(families.includes("clarity:positive"));
+  assert.ok(families.includes("clarity:negative"));
+  assert.equal(clusters.filter((cluster) => cluster.family === "clarity:positive").length, 2);
+  assert.equal(clusters.filter((cluster) => cluster.family === "clarity:negative").length, 2);
 });
 
 test("conservative fuzzy matching merges near duplicates outside known families", () => {
