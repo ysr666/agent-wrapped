@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test",
-    "test:quote": "npm run build && node --test test/quoteScorer.test.mjs"
+    "test:quote": "npm run build && node --test test/quoteScorer.test.mjs",
+    "test:session": "npm run build && node --test test/sessionAnalyzer.test.mjs"
   },
   "engines": {
     "node": ">=20"
