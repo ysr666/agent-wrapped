@@ -1,117 +1,80 @@
 # QuoteScorer v0
 
-QuoteScorer v0 is deliberately **local-first, not local-only**.
+QuoteScorer is deliberately **local-first, not local-only** and now has a narrower architectural role:
 
-Its job is narrow: rank sentence-like assistant utterances for the **single quote-of-the-session slot**.
+> Given one extracted transcript unit, how well does this line work as a standalone, screenshot-worthy quote?
 
-It is **not** a universal "is this line fun?" classifier. A line can lose the gold-quote ranking and still be excellent material for a catchphrase, wolf-cried-again, progress, celebration, or emotional-peak award.
+It is **not** the system's language-understanding layer and it is not a universal “is this fun?” classifier.
 
-It also does not try to fully understand the whole session, prove contradictions, or replace a semantic model.
+A line can lose the standalone quote ranking and still become the best catchphrase, boomerang, false dawn, or other Moment once session context is considered.
 
-## Why start local
+## P0 relationship
 
-For the quote-of-the-session task, many of the strongest signals are structural and cheap to detect:
+Semantic cues now come from the shared `EventExtractor`.
 
-- explicit reversal: “we were wrong”, “our whole approach was wrong”, “不对”, “前面的路线完全错了”
-- discovery language: “found it”, “root cause”, “重大发现”, “找到了真正的问题”
-- self-correction: “I was wrong”, “我刚才判断错了”
-- confidence escalation: “exact defect”, “definitely”, “可以确定”, “根因就是”
-- dramatic punctuation and interjections
-- contrast / plot-twist language
-- repetition, which is useful as a **negative signal only for the one-off quote ranking** because repeated lines often belong in the catchphrase / wolf-cry categories instead
+QuoteScorer consumes event-level discovery, reversal, self-correction, confidence, and drama signals. It keeps quote-specific concerns locally:
 
-These signals are multilingual enough to get a useful first ranking without sending private transcripts to another model or adding token cost.
+- expressive punctuation;
+- rhetorical contrast;
+- quote-friendly length;
+- cross-signal synergy;
+- generic-template penalty;
+- code / command / stack-trace noise;
+- repetition penalty for the **one-off quote slot**.
 
-## What v0 scores
+This avoids maintaining a second independent definition of `root cause`, `wrong`, `confidence`, and similar event language inside QuoteScorer.
 
-The current quote scorer combines:
+The canonical sentence-like splitting also lives in `src/transcript/unitExtractor.ts` rather than in QuoteScorer.
 
-1. expressive punctuation
-2. discovery / root-cause declarations
-3. explicit reversals
-4. self-corrections
-5. confidence markers
-6. dramatic / surprising wording
-7. contrast markers
-8. quote-friendly length
-9. cross-signal synergy
+## Why standalone scoring still matters
 
-It subtracts quote-ranking points for:
-
-- generic agent templates such as “Now the problem is very clear.”
-- code / command / stack-trace noise
-- exact repetition, because repeated lines are more likely to be catchphrases than one-off quote winners
-
-A line such as:
+Some Moments work because one line is already excellent by itself:
 
 > 重大发现！！！我们前面的路线完全错了！
 
-scores highly because it combines discovery + reversal + confidence + dramatic punctuation, not merely because it contains one magic keyword.
+Others only become funny after context:
 
-## Multi-dimensional fun facets
+> 这次应该真的没问题了！
+>
+> → later: 等等，不对……
 
-`scoreQuoteFacets()` now preserves several independent candidate dimensions:
+The first needs strong standalone quality. The second needs graph/context payoff. Keeping those concepts separate is important for P2/P3.
+
+## Current compatibility facets
+
+`scoreQuoteFacets()` remains available for the legacy `SessionAnalyzer`, but its semantic values also derive from `EventExtractor`.
 
 ```text
 quote
- drama
- discovery
- reversal
- progress
- celebration
- catchphrase
- wolfCry
+drama
+discovery
+reversal
+progress
+celebration
+catchphrase
+wolfCry
 ```
 
-Examples:
+These compatibility facets will gradually give way to Event + Relation + Moment data as P2/P3 land.
 
-- `现在问题已经非常明确了。` can have a low one-off quote score and a high catchphrase score when repeated.
-- `这次真的找到根因了！！！` can carry strong discovery and wolf-cry value across a session.
-- `完美命中！！！` can remain a celebration / emotional-peak candidate.
-- `重大发现！！！我们前面的路线完全错了！` can be strong on quote, discovery, reversal, and drama simultaneously.
+## Local-first boundary
 
-The facets are deliberately not collapsed back into one universal score. Final awards should use session context.
+Rules are useful for high-recall structural extraction, but they are intentionally weaker at:
 
-## What local rules will *not* reliably solve
+- subtle irony;
+- domain-specific jokes;
+- implicit semantic contradiction;
+- long-range callbacks;
+- deciding whether a discovery was genuinely surprising in context;
+- taste-level decisions between several equally plausible funny moments.
 
-Rule-based scoring is intentionally weaker at:
+Those problems do not belong in QuoteScorer. P0/P1 structure the transcript locally; P2 builds Moments; a later optional semantic layer can rerank a small candidate set.
 
-- subtle irony
-- domain-specific jokes
-- semantic contradiction with very different wording
-- deciding whether a technical discovery was genuinely surprising in context
-- long-range callbacks spanning many messages
-- deciding whether a victory lap was premature without looking at what happened later
-- distinguishing a brilliant line from a merely emotional line when both use similar surface language
+## v0 regression criterion
 
-Those belong to later stages.
+For the standalone quote slot, explicit dramatic reversals should consistently outrank generic confident status updates.
 
-## Planned architecture
-
-```text
-transcript
-  ↓
-local deterministic extraction
-  ├─ sentence-like units
-  ├─ quote signals
-  ├─ fun/category facets
-  ├─ repetition / catchphrase candidates
-  └─ obvious reversal events
-  ↓
-local award candidates (default, zero API cost)
-  ↓
-optional semantic/context layer
-  ├─ local embeddings / small local model, if practical
-  └─ opt-in LLM reranker for a small Top-N candidate set
-```
-
-The default experience should remain useful offline and private. An LLM should be an optional quality upgrade, not a requirement for the product to function.
-
-## v0 success criterion
-
-Before adding any LLM reranking, QuoteScorer v0 should consistently rank explicit dramatic reversals above generic confident status updates **for the gold-quote slot**, without deleting the losing lines from other award pipelines.
-
-For example, this quote ordering is desired:
+A useful ordering remains:
 
 1. `重大发现！！！我们前面的路线完全错了！`
 2. `等等，我刚才的判断可能完全反了。`
@@ -119,6 +82,4 @@ For example, this quote ordering is desired:
 4. `现在问题已经非常明确了。`
 5. `我先检查一下配置文件。`
 
-But if line 4 occurs twelve times, it should simultaneously become a strong catchphrase candidate.
-
-The exact scores are not important yet; the behavioral distinction is.
+But line 4 repeated twelve times should still become strong repetition evidence in the Moment Graph. Losing the quote ranking must never mean the line is discarded from the rest of the system.
