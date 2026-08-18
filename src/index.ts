@@ -31,3 +31,7 @@ export * from "./ingest/dshFilesystem.js";
 export * from "./evaluation/types.js";
 export * from "./evaluation/benchmark.js";
 export * from "./evaluation/localDsh.js";
+export * from "./review/types.js";
+export * from "./review/workspace.js";
+export * from "./review/reviewer.js";
+export * from "./review/runner.js";
