@@ -47,14 +47,29 @@ test("P6 builds a bounded preference case from a real-session-shaped transcript"
   assert.equal(result.host, "dsh");
   assert.equal(result.model, "deepseek-v4-flash");
   assert.ok(result.moments.length > 0);
-  assert.ok(result.moments.length <= 6);
   assert.ok(result.pairwiseTasks.length > 0);
   assert.ok(result.pairwiseTasks.length <= 7);
-  assert.ok(result.moments.some((moment) => moment.selected));
+  const selected = result.moments.filter((moment) => moment.selected);
+  assert.ok(selected.length > 0);
+  assert.ok(selected.every((moment) => moment.awardId));
   assert.ok(result.moments.some((moment) => moment.primaryText.includes("路线完全错了") || moment.relatedTexts.some((text) => text.includes("路线完全错了"))));
   for (const task of result.pairwiseTasks) {
     assert.ok(task.predictedWinnerId === task.left.id || task.predictedWinnerId === task.right.id);
   }
+});
+
+test("P6 retains displayed awards even when they fall outside the raw P3 top-N", () => {
+  const result = buildSessionEvaluationCase(session(), {
+    topMoments: 1,
+    maxPairwiseTasks: 8,
+    wrapped: { awards: { maxAwards: 5 } },
+  });
+
+  const selected = result.moments.filter((moment) => moment.selected);
+  assert.ok(selected.length >= 2);
+  assert.ok(result.moments.length >= selected.length);
+  assert.ok(selected.every((moment) => moment.awardId && moment.awardKind));
+  assert.ok(result.moments.length > 1, "selected P3.5 cards must survive even when topMoments is 1");
 });
 
 test("P6 pairwise scoring uses the latest vote and reports unknown task ids", () => {
