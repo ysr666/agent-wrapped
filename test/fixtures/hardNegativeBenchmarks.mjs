@@ -1,0 +1,78 @@
+export const hardNegativeBenchmarks = [
+  {
+    id: "zh-punctuation-bait",
+    language: "zh",
+    gold: "等等，不对，我们一直在修错的模块。真正的问题根本不在这里。",
+    negatives: [
+      "太棒了！！！！！！",
+      "终于搞定了！！！",
+      "这也太离谱了！！！",
+      "重大发现！！！",
+      "好消息！！！问题解决了！！！",
+    ],
+    note: "Pure excitement, punctuation, and a bare discovery lead-in should not beat an explicit reversal with a concrete change of direction.",
+  },
+  {
+    id: "en-confidence-bait",
+    language: "en",
+    gold: "Wait — no, I was wrong; we have been fixing the wrong layer this whole time.",
+    negatives: [
+      "Absolutely! This is definitely the root cause!!!",
+      "Found it!!!",
+      "Great news — everything is fixed!",
+      "This is clearly the exact issue.",
+      "Perfect! We finally found the bug!",
+    ],
+    note: "Confidence escalation and celebratory wording should not outrank an explicit self-correction plus reversal.",
+  },
+  {
+    id: "zh-generic-resolution-bait",
+    language: "zh",
+    gold: "我收回刚才的结论：不是缓存失效，而是我们从一开始就读错了配置源。",
+    negatives: [
+      "问题已经彻底解决了！",
+      "现在可以确定根因了！",
+      "终于修好了！！！",
+      "这次应该真的没问题了。",
+      "我已经确认了真正的问题。",
+    ],
+    note: "Generic completion/root-cause declarations should stay below a line that actually retracts and replaces an earlier explanation.",
+  },
+  {
+    id: "en-apology-bait",
+    language: "en",
+    gold: "You're right — I was wrong about the parser; the failure is actually caused before parsing even starts.",
+    negatives: [
+      "You're absolutely right. My mistake.",
+      "Sorry about that!",
+      "I apologize — I got that wrong.",
+      "Thanks for catching that!",
+      "Good catch!!!",
+    ],
+    note: "A bare apology is not automatically a memorable quote; the correction should carry an actual reversal or payoff.",
+  },
+  {
+    id: "zh-keyword-stuffing-bait",
+    language: "zh",
+    gold: "真正的反转在这里：我们以为是模型选错了，其实整个请求根本没有走到模型层。",
+    negatives: [
+      "根因、真正的问题、重大突破、完全确定！！！",
+      "重大发现！根因就是这个问题！",
+      "现在已经可以完全确定真正的根因了。",
+      "重大突破！！！问题非常明确！！！",
+    ],
+    note: "Stuffing high-value trigger words into a sentence should not be enough to beat a coherent contrast/reversal.",
+  },
+  {
+    id: "en-keyword-stuffing-bait",
+    language: "en",
+    gold: "Plot twist: the cache was fine; we were debugging a request that never reached the cache at all.",
+    negatives: [
+      "Major breakthrough! Exact root cause! Definitely found it!!!",
+      "Root cause confirmed. Exact issue identified.",
+      "Wait!!! Found it!!! Root cause!!!",
+      "This is definitely, clearly, exactly the real issue!",
+    ],
+    note: "A pile of discovery/confidence keywords should not beat a self-contained twist with a meaningful contrast.",
+  },
+];
