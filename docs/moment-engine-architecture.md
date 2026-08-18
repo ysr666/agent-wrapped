@@ -57,10 +57,17 @@ Real-session evaluation            ← P6 ✅
    ├─ missed moments
    └─ calibration report
    ↓
+Local evaluation runner            ← P7 ✅
+   ├─ durable local review workspace
+   ├─ resumable interactive review
+   ├─ blind A/B decisions
+   ├─ progress/status
+   └─ calibration CLI
+   ↓
 🎬 Agent Wrapped
 ```
 
-P5 is drawn at the top because ingestion happens before P0 at runtime even though it was implemented later. P6 is the feedback loop around the completed local pipeline.
+P5 is drawn at the top because ingestion happens before P0 at runtime even though it was implemented later. P6/P7 form the feedback loop around the completed local pipeline.
 
 ---
 
@@ -236,17 +243,7 @@ IngestedSession
 
 The first production adapter follows the current DSH durable session format.
 
-DSH stores sessions beneath:
-
-```text
-$DSH_HOME/sessions
-```
-
-or, when `DSH_HOME` is unset:
-
-```text
-~/.dsh/sessions
-```
+DSH stores sessions beneath `$DSH_HOME/sessions`, or `~/.dsh/sessions` when `DSH_HOME` is unset.
 
 The adapter supports:
 
@@ -259,28 +256,11 @@ The adapter supports:
 
 It intentionally consumes the final durable `assistant/message` rather than streaming `assistant/chunk` rows, preventing the same answer from being counted twice.
 
-### Reasoning privacy boundary
+A reasoning block being present in a durable artifact does **not** automatically mean it was user-visible. Therefore DSH reasoning is excluded by default. `includeVisibleReasoning: true` is an explicit caller policy for a surface where that reasoning was actually shown to the user.
 
-A reasoning block being present in a durable artifact does **not** automatically mean it was user-visible. Therefore DSH reasoning is excluded by default.
+Direct reads of DSH's Zstandard artifacts use the runtime's `node:zlib` Zstandard API. Agent Wrapped now targets Node 22.19+ so the primary DSH/P7 path can read current compressed artifacts directly.
 
-`includeVisibleReasoning: true` is an explicit caller policy for a surface where that reasoning was actually shown to the user. Agent Wrapped does not claim access to hidden chain-of-thought.
-
-### Compression/runtime boundary
-
-Direct reads of DSH's Zstandard artifacts use the runtime's `node:zlib` Zstandard API. Current DSH itself targets Node 22.19+ / 24+, so CI exercises the adapter on Node 22. Exported plaintext `session.jsonl` remains a portable ingestion path.
-
-### Cross-host boundary
-
-P5 is structurally complete but host coverage is incremental:
-
-```text
-DSH          ✅
-Claude Code  next
-Codex        next
-OpenCode     later
-```
-
-Every future adapter must end at `TranscriptMessage[]`; it must not change P0–P6 semantics.
+Every future adapter must still end at `TranscriptMessage[]`; it must not change P0–P7 semantics.
 
 ---
 
@@ -302,43 +282,79 @@ Pairwise tasks cover two useful failure modes:
 1. adjacent P3 candidates — “did the ranker order these correctly?”;
 2. selected vs strong rejected candidates — “did AwardComposer choose the right card?”
 
-Human review supports:
+Human review supports award keep/drop, optional 1–5 fun rating, pairwise left/right/tie/skip, and human-supplied missed moments.
 
-```text
-award keep / drop
-optional 1–5 fun rating
-pairwise left / right / tie / skip
-human-supplied missed moments
-```
-
-`buildCalibrationReport()` aggregates:
-
-```text
-review coverage
-award keep-rate
-average award fun rating
-pairwise ranking accuracy
-missed-moment count
-per-award-kind keep/fun metrics
-```
+`buildCalibrationReport()` aggregates review coverage, award keep-rate, average fun rating, pairwise ranking accuracy, missed-moment count, and per-award-kind metrics.
 
 The API measures the current engine; it does not automatically mutate thresholds or train a model. That separation keeps calibration evidence inspectable.
 
-For local DSH data, `prepareLocalDshEvaluation()` connects P5 and P6 directly:
+---
+
+## P7 — Local Evaluation Runner ✅
+
+P7 turns P5/P6 from library APIs into a real repeatable experiment loop.
+
+The primary commands are:
+
+```bash
+agent-wrapped dsh --latest 30
+agent-wrapped review
+agent-wrapped status
+agent-wrapped calibration
+```
+
+When developing directly from the repository, the same entry point is `node dist/cli.js ...` after `npm run build`.
+
+### Durable review workspace
+
+Default storage:
 
 ```text
-~/.dsh/sessions
-   ↓
-loadDshSessions()
-   ↓
-P0 → P4
-   ↓
-buildEvaluationDataset()
-   ↓
-human review
-   ↓
-buildCalibrationReport()
+$AGENT_WRAPPED_HOME/review-workspace.json
 ```
+
+with fallback:
+
+```text
+~/.agent-wrapped/review-workspace.json
+```
+
+The workspace stores `SessionEvaluationCase[]`, human `SessionHumanReview[]`, completion state, and deterministic case fingerprints. It does **not** store a second copy of the source DSH transcripts.
+
+Writes checkpoint after every accepted answer using a temporary JSON file plus rename. Quitting midway leaves a resumable partial review rather than losing the whole session.
+
+### Refresh safety
+
+Running `agent-wrapped dsh` again rebuilds current P6 cases. Existing human reviews are preserved only when the case fingerprint is unchanged.
+
+If P0–P3.5 changes produce a different moment/task set for a session, the old review is invalidated. This prevents stale labels from silently contaminating calibration.
+
+### Interactive review
+
+Award review shows the actual selected card type and source wording, then asks:
+
+```text
+keep / drop
+optional 1–5 fun score
+```
+
+Pairwise review is intentionally blind to the algorithm's current opinion. The prompt does not expose `funScore`, confidence, predicted winner, or selected/rejected status while asking which candidate deserves the Wrapped slot.
+
+At the end of a session, the reviewer can manually record missed moments. These are the key signal for separating recall failures from ranking/selection failures.
+
+### Resume semantics
+
+Already-answered awards and pairwise tasks are skipped on the next run. A session is marked complete only after the award, pairwise, and missed-moment steps finish.
+
+`review --all` can continue through every incomplete case; `review --session <id>` targets one session.
+
+### Status and calibration
+
+`agent-wrapped status` reports review progress. `agent-wrapped calibration` runs the existing P6 `buildCalibrationReport()` over the persisted workspace and exposes both human-readable and `--json` output.
+
+P7 intentionally does not auto-tune weights. Its job is to make collecting trustworthy evidence cheap enough that the next algorithmic decision can be data-driven.
+
+See `docs/p7-local-review-runner.md` for the operational protocol.
 
 ---
 
@@ -356,6 +372,7 @@ Adapter
 → Award
 → WrappedReport
 → Evaluation
+→ Local Review
 ```
 
 No new `SomethingDetector` should be introduced unless the concept truly cannot be represented inside those layers.
@@ -373,18 +390,18 @@ test:award-composer  → P3.5
 test:wrapped         → P4
 test:ingest          → P5 DSH parsing/discovery/Zstandard
 test:evaluation      → P6 preference/calibration
+test:review          → P7 workspace/review/CLI
 test:p5-p6           → P5 + P6 focused regression
+test:p7              → P7 focused regression
 ```
 
-P5 tests include real concatenated Zstandard frames generated through Node's Zstandard API so compressed-session support is exercised rather than mocked.
-
-P6 tests cover bounded case generation, latest-vote semantics, unknown task IDs, pairwise accuracy, award keep/fun aggregation, missed moments, and retention of P3.5 awards outside raw P3 top-N.
+P7 tests cover fingerprint-safe refresh, partial checkpoint/resume, atomic workspace persistence, completed-session progress, calibration against persisted votes, CLI review/status/calibration, and invalid argument handling.
 
 ---
 
-## Boundary after P6
+## Boundary after P7
 
-P0–P6 now provide the complete local measurement loop:
+P0–P7 now provide the complete local **measurement workflow**:
 
 ```text
 real host session
@@ -393,19 +410,21 @@ real host session
 → compose
 → rank
 → present
-→ ask humans whether it was actually good
+→ collect blind/explicit human judgments
+→ persist and resume review
+→ measure the failure distribution
 ```
 
 Still intentionally outside the current implementation:
 
 ```text
 Claude Code / Codex / OpenCode adapters
-large real human-reviewed corpus
+first substantial human-reviewed real corpus
 optional embedding / LLM semantic rerank
-CLI / plugin product entry
+polished plugin/end-user UI
 web / share-card visual UI
 weekly / monthly / yearly aggregation
 cross-agent leaderboards
 ```
 
-The next major decision should be driven by P6 evidence. If real-session reviews show semantic misses that local rules cannot fix cleanly, an optional semantic reranker is justified. If the dominant failures are ingestion or rule calibration, adding an LLM would only hide the wrong problem.
+The immediate next action is not another detector. It is to run P7 over a meaningful DSH corpus and inspect where the failures actually concentrate. If reviews show semantic misses that local rules cannot fix cleanly, an optional semantic reranker becomes justified. If the failures mostly come from thresholds, ingestion, composition, or award diversity, those layers should be corrected directly.
