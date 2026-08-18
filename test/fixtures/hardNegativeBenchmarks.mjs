@@ -54,25 +54,25 @@ export const hardNegativeBenchmarks = [
   {
     id: "zh-keyword-stuffing-bait",
     language: "zh",
-    gold: "真正的反转在这里：我们以为是模型选错了，其实整个请求根本没有走到模型层。",
+    gold: "重大发现！！！我们前面的路线完全错了！",
     negatives: [
       "根因、真正的问题、重大突破、完全确定！！！",
       "重大发现！根因就是这个问题！",
       "现在已经可以完全确定真正的根因了。",
       "重大突破！！！问题非常明确！！！",
     ],
-    note: "Stuffing high-value trigger words into a sentence should not be enough to beat a coherent contrast/reversal.",
+    note: "A pile of high-value trigger words should still lose to a line where discovery, reversal, confidence, and dramatic expression reinforce each other.",
   },
   {
     id: "en-keyword-stuffing-bait",
     language: "en",
-    gold: "Plot twist: the cache was fine; we were debugging a request that never reached the cache at all.",
+    gold: "Wait — no, I was wrong; our whole approach was wrong.",
     negatives: [
-      "Major breakthrough! Exact root cause! Definitely found it!!!",
-      "Root cause confirmed. Exact issue identified.",
-      "Wait!!! Found it!!! Root cause!!!",
+      "Major breakthrough — exact root cause, definitely found it!!!",
+      "Root cause confirmed — exact issue identified.",
+      "Wait — found it, root cause!!!",
       "This is definitely, clearly, exactly the real issue!",
     ],
-    note: "A pile of discovery/confidence keywords should not beat a self-contained twist with a meaningful contrast.",
+    note: "Keyword density by itself should not beat a compact self-correction plus explicit reversal. Subtle semantic plot twists are reserved for the later context layer.",
   },
 ];
