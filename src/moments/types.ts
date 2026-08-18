@@ -26,6 +26,8 @@ export interface Moment {
 
   topic?: string;
   topicLabel?: string;
+  /** Optional repeated verbal-family hint, for example `root-cause-found:positive`. */
+  family?: string;
   count?: number;
   variants?: string[];
 
