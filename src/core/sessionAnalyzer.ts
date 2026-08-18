@@ -1,3 +1,7 @@
+import {
+  clusterCatchphraseCandidates,
+  type CatchphraseCluster,
+} from "./catchphraseClusterer.js";
 import { scoreQuoteFacets, type QuoteFacetScores } from "./facetScorer.js";
 import { rankQuoteCandidates } from "./quoteScorer.js";
 import type { TranscriptMessage } from "./types.js";
@@ -27,6 +31,8 @@ export interface SessionAward {
   text: string;
   messageIndexes: number[];
   count?: number;
+  variants?: string[];
+  clusterFamily?: string;
   relatedText?: string;
   relatedMessageIndex?: number;
   facets?: QuoteFacetScores;
@@ -71,10 +77,15 @@ function clampScore(value: number): number {
 
 function normalizeForGrouping(text: string): string {
   return text
+    .normalize("NFKC")
     .toLocaleLowerCase()
     .replace(/[“”"'`*_~]/gu, "")
     .replace(/[。！？!?…，,；;：:\s]+/gu, " ")
     .trim();
+}
+
+function memberKey(text: string, messageIndex: number): string {
+  return `${messageIndex}\u0000${normalizeForGrouping(text)}`;
 }
 
 function uniqueSorted(values: number[]): number[] {
@@ -100,6 +111,13 @@ function makeAward(
   };
 }
 
+function clusterCandidates(candidates: Array<{ text: string; messageIndex: number }>, minCount = 1): CatchphraseCluster[] {
+  return clusterCatchphraseCandidates(candidates, {
+    minCount,
+    fuzzy: true,
+  });
+}
+
 function buildCandidates(messages: TranscriptMessage[]): SessionCandidate[] {
   // Reuse QuoteScorer's sentence-like extraction instead of maintaining a second
   // tokenizer. We request every candidate and do the session-level scoring here.
@@ -109,14 +127,20 @@ function buildCandidates(messages: TranscriptMessage[]): SessionCandidate[] {
     penalizeRepetition: false,
   });
 
-  const counts = new Map<string, number>();
-  for (const candidate of extracted) {
-    const key = normalizeForGrouping(candidate.text);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+  // Repetition is cluster-aware: paraphrases such as “问题已经很明确了” and
+  // “这下问题非常清楚了” can count as the same verbal tic.
+  const clusters = clusterCandidates(
+    extracted.map((candidate) => ({ text: candidate.text, messageIndex: candidate.messageIndex })),
+  );
+  const repetitionCounts = new Map<string, number>();
+  for (const cluster of clusters) {
+    for (const member of cluster.members) {
+      repetitionCounts.set(memberKey(member.text, member.messageIndex), cluster.count);
+    }
   }
 
   return extracted.map((candidate) => {
-    const repetitionCount = counts.get(normalizeForGrouping(candidate.text)) ?? 1;
+    const repetitionCount = repetitionCounts.get(memberKey(candidate.text, candidate.messageIndex)) ?? 1;
     return {
       text: candidate.text,
       messageIndex: candidate.messageIndex,
@@ -159,38 +183,58 @@ function pickFacetCandidate(
   return diverse ?? best;
 }
 
+function findCandidateForMember(
+  candidates: SessionCandidate[],
+  text: string,
+  messageIndex: number,
+): SessionCandidate | undefined {
+  return candidates.find(
+    (candidate) =>
+      candidate.messageIndex === messageIndex &&
+      normalizeForGrouping(candidate.text) === normalizeForGrouping(text),
+  );
+}
+
 function findCatchphrase(
   candidates: SessionCandidate[],
   minCount: number,
 ): SessionAward | undefined {
-  const groups = new Map<string, SessionCandidate[]>();
+  const clusters = clusterCandidates(candidates, minCount);
+  if (clusters.length === 0) return undefined;
 
-  for (const candidate of candidates) {
-    const key = normalizeForGrouping(candidate.text);
-    if (key.length < 4) continue;
-    const group = groups.get(key) ?? [];
-    group.push(candidate);
-    groups.set(key, group);
-  }
+  const ranked = clusters
+    .map((cluster) => {
+      const memberCandidates = cluster.members
+        .map((member) => findCandidateForMember(candidates, member.text, member.messageIndex))
+        .filter((candidate): candidate is SessionCandidate => Boolean(candidate));
+      const representative = memberCandidates.sort(
+        (a, b) => b.facets.drama - a.facets.drama || b.facets.quote - a.facets.quote || a.messageIndex - b.messageIndex,
+      )[0];
+      const baseScore = Math.max(0, ...memberCandidates.map((candidate) => candidate.facets.catchphrase));
+      const score = Math.min(100, baseScore + Math.min(12, Math.max(0, cluster.count - 2) * 3));
+      return { cluster, representative, score };
+    })
+    .filter(
+      (entry): entry is { cluster: CatchphraseCluster; representative: SessionCandidate; score: number } =>
+        Boolean(entry.representative),
+    )
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.cluster.count - a.cluster.count ||
+        b.cluster.confidence - a.cluster.confidence ||
+        a.cluster.messageIndexes[0]! - b.cluster.messageIndexes[0]!,
+    );
 
-  const eligible = [...groups.values()].filter((group) => group.length >= minCount);
-  if (eligible.length === 0) return undefined;
+  const winner = ranked[0];
+  if (!winner) return undefined;
 
-  eligible.sort((a, b) => {
-    const aScore = Math.max(...a.map((candidate) => candidate.facets.catchphrase));
-    const bScore = Math.max(...b.map((candidate) => candidate.facets.catchphrase));
-    return bScore - aScore || b.length - a.length || a[0].messageIndex - b[0].messageIndex;
-  });
-
-  const group = eligible[0];
-  const representative = [...group].sort(
-    (a, b) => b.facets.drama - a.facets.drama || b.facets.quote - a.facets.quote,
-  )[0];
-  const score = Math.max(...group.map((candidate) => candidate.facets.catchphrase));
-
-  return makeAward("catchphrase", representative, score, {
-    count: group.length,
-    messageIndexes: uniqueSorted(group.map((candidate) => candidate.messageIndex)),
+  return makeAward("catchphrase", winner.representative, winner.score, {
+    text: winner.cluster.canonicalText,
+    count: winner.cluster.count,
+    variants: winner.cluster.variants,
+    clusterFamily: winner.cluster.family,
+    messageIndexes: winner.cluster.messageIndexes,
   });
 }
 
@@ -208,12 +252,19 @@ function findWolfCry(
       b.facets.drama - a.facets.drama ||
       a.messageIndex - b.messageIndex,
   )[0];
+  if (!representative) return undefined;
 
   const bestDiscovery = Math.max(...declarations.map((candidate) => candidate.facets.discovery));
   const score = bestDiscovery * 0.55 + Math.min(45, declarations.length * 10);
 
+  const rootCauseCluster = clusterCandidates(declarations, 1).sort(
+    (a, b) => b.count - a.count || b.confidence - a.confidence,
+  )[0];
+
   return makeAward("wolf-cry", representative, score, {
     count: declarations.length,
+    variants: rootCauseCluster?.count && rootCauseCluster.count > 1 ? rootCauseCluster.variants : undefined,
+    clusterFamily: rootCauseCluster?.count && rootCauseCluster.count > 1 ? rootCauseCluster.family : undefined,
     messageIndexes: uniqueSorted(declarations.map((candidate) => candidate.messageIndex)),
   });
 }
@@ -311,11 +362,7 @@ export function analyzeSession(
     victoryLap ? makeAward("victory-lap", victoryLap, victoryLap.facets.celebration) : undefined,
   );
 
-  const repeatedPhraseGroups = new Set(
-    candidates
-      .filter((candidate) => candidate.repetitionCount >= minCatchphraseCount)
-      .map((candidate) => normalizeForGrouping(candidate.text)),
-  ).size;
+  const repeatedPhraseGroups = clusterCandidates(candidates, minCatchphraseCount).length;
 
   return {
     awards,
