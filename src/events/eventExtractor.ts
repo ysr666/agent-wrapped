@@ -62,6 +62,7 @@ function eventDrama(text: string, signals: Partial<Record<EventType, EventSignal
     punctuationEnergy(text) +
       signalStrength(signals, "confusion") * 0.42 +
       signalStrength(signals, "celebration") * 0.28 +
+      signalStrength(signals, "progress_claim") * 0.2 +
       signalStrength(signals, "discovery_claim") * 0.18 +
       signalStrength(signals, "reversal") * 0.18,
   );
