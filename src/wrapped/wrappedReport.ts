@@ -5,6 +5,8 @@ import { rankMoments } from "../moments/momentRanker.js";
 import { composeAwards } from "../awards/awardComposer.js";
 import type { CreateWrappedReportOptions, WrappedReport } from "./types.js";
 
+export type { CreateWrappedReportOptions } from "./types.js";
+
 function defaultTitle(locale: WrappedReport["locale"]): string {
   return locale === "en" ? "Tonight's Agent Wrapped" : "今晚的 Agent Wrapped";
 }
