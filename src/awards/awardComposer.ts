@@ -14,6 +14,11 @@ interface AwardLabel {
   en: string;
 }
 
+interface AwardCandidate {
+  moment: RankedMoment;
+  kind: AwardKind;
+}
+
 const LABELS: Record<AwardKind, AwardLabel> = {
   quote: { emoji: "🏆", zh: "本场金句", en: "Quote of the session" },
   catchphrase: { emoji: "📢", zh: "高频口癖", en: "Catchphrase" },
@@ -153,9 +158,10 @@ function toAward(moment: RankedMoment, kind: AwardKind, locale: AwardLocale): Aw
 /**
  * P3.5: turn ranked Moments into a small, diverse set of user-facing awards.
  *
- * This stage never reparses transcript language and never rewrites the source
- * quote. It only decides which already-understood moments deserve a card and
- * how those cards should be labeled.
+ * The first pass protects the three MVP questions when strong candidates exist:
+ * the best quote, the strongest repeated verbal pattern, and the biggest
+ * boomerang. The second pass fills the remaining slots with the best diverse
+ * side moments. P3.5 never reparses or rewrites transcript text.
  */
 export function composeAwards(
   rankedMoments: RankedMoment[],
@@ -178,11 +184,8 @@ export function composeAwards(
       (a.messageIndexes[0] ?? 0) - (b.messageIndexes[0] ?? 0),
   );
 
-  const awards: Award[] = [];
-  const selected: Array<{ moment: RankedMoment; kind: AwardKind }> = [];
-  const kindCounts = new Map<AwardKind, number>();
   const rejected: RejectedAwardCandidate[] = [];
-
+  const eligible: AwardCandidate[] = [];
   for (const moment of ordered) {
     if (moment.scores.funScore < minFunScore) {
       rejected.push({ momentId: moment.id, reason: "below-fun-threshold" });
@@ -192,24 +195,66 @@ export function composeAwards(
       rejected.push({ momentId: moment.id, reason: "below-confidence-threshold" });
       continue;
     }
+    eligible.push({ moment, kind: awardKindFor(moment) });
+  }
 
-    const kind = awardKindFor(moment);
-    if ((kindCounts.get(kind) ?? 0) >= maxPerKind) {
-      rejected.push({ momentId: moment.id, reason: "duplicate-award-kind" });
-      continue;
-    }
-    if (overlapsSelectedStory(moment, kind, selected, maxContainmentOverlap)) {
-      rejected.push({ momentId: moment.id, reason: "overlaps-selected-moment" });
-      continue;
-    }
+  const awards: Award[] = [];
+  const selected: Array<{ moment: RankedMoment; kind: AwardKind }> = [];
+  const kindCounts = new Map<AwardKind, number>();
+  const finalized = new Set<string>();
+
+  function reject(candidate: AwardCandidate, reason: RejectedAwardCandidate["reason"]): void {
+    if (finalized.has(candidate.moment.id)) return;
+    finalized.add(candidate.moment.id);
+    rejected.push({ momentId: candidate.moment.id, reason });
+  }
+
+  function trySelect(candidate: AwardCandidate): boolean {
+    if (finalized.has(candidate.moment.id)) return false;
     if (awards.length >= maxAwards) {
-      rejected.push({ momentId: moment.id, reason: "award-limit" });
-      continue;
+      reject(candidate, "award-limit");
+      return false;
+    }
+    if ((kindCounts.get(candidate.kind) ?? 0) >= maxPerKind) {
+      reject(candidate, "duplicate-award-kind");
+      return false;
+    }
+    if (
+      overlapsSelectedStory(
+        candidate.moment,
+        candidate.kind,
+        selected,
+        maxContainmentOverlap,
+      )
+    ) {
+      reject(candidate, "overlaps-selected-moment");
+      return false;
     }
 
-    awards.push(toAward(moment, kind, locale));
-    selected.push({ moment, kind });
-    kindCounts.set(kind, (kindCounts.get(kind) ?? 0) + 1);
+    finalized.add(candidate.moment.id);
+    awards.push(toAward(candidate.moment, candidate.kind, locale));
+    selected.push({ moment: candidate.moment, kind: candidate.kind });
+    kindCounts.set(candidate.kind, (kindCounts.get(candidate.kind) ?? 0) + 1);
+    return true;
+  }
+
+  const coreGroups: Array<(candidate: AwardCandidate) => boolean> = [
+    (candidate) => candidate.kind === "quote",
+    (candidate) => candidate.kind === "catchphrase" || candidate.kind === "wolf-cry",
+    (candidate) => candidate.kind === "boomerang",
+  ];
+
+  for (const matchesCoreGroup of coreGroups) {
+    if (awards.length >= maxAwards) break;
+    for (const candidate of eligible) {
+      if (finalized.has(candidate.moment.id) || !matchesCoreGroup(candidate)) continue;
+      if (trySelect(candidate)) break;
+    }
+  }
+
+  for (const candidate of eligible) {
+    if (finalized.has(candidate.moment.id)) continue;
+    trySelect(candidate);
   }
 
   return {
