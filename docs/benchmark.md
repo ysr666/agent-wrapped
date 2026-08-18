@@ -32,13 +32,30 @@ Hard negatives are intentionally plausible false winners. They contain the kinds
 
 Each hard-negative case has one intended quote and several tempting decoys. The test asserts that the intended quote outranks every decoy.
 
-The current v0 hard-negative corpus includes both Chinese and English cases for:
+The general v0 hard-negative corpus includes both Chinese and English cases for:
 
 1. punctuation bait;
 2. confidence bait;
 3. generic resolution/completion language;
 4. apology bait;
 5. keyword stuffing.
+
+### DeepSeek / DSH-style synthetic guardrails
+
+The benchmark also contains a dedicated set of **synthetic style guardrails** for long Chinese DeepSeek/DSH sessions. These are not presented as verbatim DeepSeek transcripts. They model failure modes that are especially important to test when a session contains lots of confident progress narration.
+
+The current DSH-style cases cover:
+
+- **clarity escalation** — repeated variants of “现在问题已经非常清楚/明确了”;
+- **progress announcements** — “重大进展”“关键进展”“已经接近根因” without an actual twist;
+- **root-cause announcements** — “这次真的找到根因了” without replacing an earlier diagnosis;
+- **emotional debugging commentary** — “离谱”“诡异”“这下有意思了” without enough payoff;
+- **premature resolution** — “应该已经修好了”“可以结束了” before the session has really converged;
+- **self-congratulation** — “漂亮”“完美命中”“终于对了” without a reversal or self-own.
+
+The intended winners in these cases contain more than style: an explicit retraction, changed direction, contradiction, or concrete payoff. This protects QuoteScorer from becoming a detector for “how excited did the model sound?”.
+
+There is also a dedicated regression test where the DSH-style line `现在问题已经非常明确了。` appears six times. It must lose the quote-of-the-session ranking to a one-off reversal, while remaining available for later catchphrase analysis.
 
 These cases are deliberately limited to distinctions that the local surface scorer can reasonably make. Subtle semantic twists whose value only appears after comparing distant context belong to the later context/semantic benchmark rather than being faked with regex expectations.
 
@@ -59,6 +76,7 @@ Additional guardrails verify that:
 - dramatic Chinese reversals expose discovery + reversal + confidence signals;
 - generic "problem is clear" language receives a template penalty;
 - exact repetition lowers quote score because repeated wording belongs in catchphrase analysis;
+- repeated DSH-style clarity announcements lose quote ranking to a one-off reversal;
 - commands/code noise are penalized;
 - user/tool text is not accidentally treated as an assistant quote.
 
