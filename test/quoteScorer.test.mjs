@@ -84,6 +84,33 @@ test("repetition penalty pushes repeated discoveries toward catchphrase territor
   assert.ok((repeated.signals.repetition ?? 0) < 0);
 });
 
+test("DSH-style repeated clarity line loses to a one-off reversal", () => {
+  const messages = [
+    ...Array.from({ length: 6 }, () => ({
+      role: "assistant",
+      host: "dsh",
+      text: "现在问题已经非常明确了。",
+    })),
+    {
+      role: "assistant",
+      host: "dsh",
+      text: "等等，不对，我们前面一直把现象当成根因了。",
+    },
+  ];
+
+  const ranked = rankQuoteCandidates(messages, {
+    minScore: 0,
+    limit: 20,
+    penalizeRepetition: true,
+  });
+
+  assert.equal(ranked[0].text, "等等，不对，我们前面一直把现象当成根因了。");
+
+  const repeated = ranked.find((candidate) => candidate.text === "现在问题已经非常明确了。");
+  assert.ok(repeated, "repeated DSH-style clarity line should still be extracted for comparison");
+  assert.ok(ranked[0].score > repeated.score);
+});
+
 test("code and command noise is penalized", () => {
   const result = scoreQuote("npm test && git status --short");
   assert.ok((result.signals["code-noise"] ?? 0) < 0);
