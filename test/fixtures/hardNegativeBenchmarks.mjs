@@ -125,7 +125,7 @@ export const hardNegativeBenchmarks = [
     language: "zh",
     style: "deepseek-dsh",
     provenance: "synthetic-style-guardrail",
-    gold: "这就有意思了：日志看起来成功，但真正的写入根本没有发生。",
+    gold: "等等，不对，这就有意思了：日志明明显示成功，但真正的写入根本没有发生。",
     negatives: [
       "离谱！！！",
       "这也太诡异了！！！",
@@ -133,7 +133,7 @@ export const hardNegativeBenchmarks = [
       "这个现象很奇怪。",
       "好家伙，这下有意思了！！！",
     ],
-    note: "Emotional debugging commentary is fun but should not outrank a compact line that contains an actual contradiction or surprise.",
+    note: "Emotional debugging commentary is fun but should not outrank a compact line that contains an actual reversal plus contradiction/surprise.",
   },
   {
     id: "dsh-premature-resolution-bait",
