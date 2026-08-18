@@ -11,6 +11,7 @@ export interface EvaluationMomentSnapshot {
   confidence: number;
   selected: boolean;
   awardKind?: AwardKind;
+  awardId?: string;
 }
 
 export interface PairwisePreferenceTask {
