@@ -10,7 +10,8 @@
     "test": "npm run build && node --test",
     "test:quote": "npm run build && node --test test/quoteScorer.test.mjs",
     "test:session": "npm run build && node --test test/sessionAnalyzer.test.mjs",
-    "test:catchphrase": "npm run build && node --test test/catchphraseClusterer.test.mjs"
+    "test:catchphrase": "npm run build && node --test test/catchphraseClusterer.test.mjs",
+    "test:boomerang": "npm run build && node --test test/boomerangDetector.test.mjs"
   },
   "engines": {
     "node": ">=20"
