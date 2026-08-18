@@ -16,25 +16,28 @@ Instead of only counting tokens and tool calls, Agent Wrapped looks for the part
 
 Agent Wrapped is intentionally entertainment-first. It should feel more like an awards show for your AI sessions than another productivity dashboard.
 
-The core is **moment-first, award-second**:
+The architecture is **moment-first, award-second**:
 
 ```text
-Transcript
+Local session logs
   ↓
-EventExtractor       ✅ P0
+Session ingestion      ✅ P5
   ↓
-MomentGraph          ✅ P1
+TranscriptMessage[]
   ↓
-MomentBuilder        ✅ P2
+EventExtractor         ✅ P0
   ↓
-MomentRanker         ✅ P3
+MomentGraph            ✅ P1
   ↓
-AwardComposer        ✅ P3.5
+MomentBuilder          ✅ P2
   ↓
-WrappedReport        ✅ P4
-  ├─ Markdown
-  ├─ plain text
-  └─ preference hooks
+MomentRanker           ✅ P3
+  ↓
+AwardComposer          ✅ P3.5
+  ↓
+WrappedReport          ✅ P4
+  ↓
+Real-session evaluation ✅ P6
   ↓
 🎬 Agent Wrapped
 ```
@@ -48,7 +51,9 @@ An award is how a strong moment gets presented; it is not a reason to create ano
 - ✅ **P2 — MomentBuilder**: composes graph structure into `one_liner`, `repeated_pattern`, `boomerang`, `false_dawn`, `plot_twist`, and `correction_arc` moments.
 - ✅ **P3 — MomentRanker**: ranks complete moments with separate `funScore` and `confidence`, plus standalone quality, context payoff, surprise, rarity, readability, and structural strength.
 - ✅ **P3.5 — AwardComposer**: protects the three MVP slots (quote, repeated verbal pattern, boomerang), fills remaining slots with strong side moments, deduplicates overlapping structural views, and never forces weak cards just to reach a quota.
-- ✅ **P4 — WrappedReport / output layer**: runs P0→P3.5 end to end, returns a compact share-oriented report, renders Markdown/plain text, and exposes a lightweight human-preference feedback format for real-session evaluation.
+- ✅ **P4 — WrappedReport / output layer**: runs P0→P3.5 end to end, returns a compact share-oriented report, renders Markdown/plain text, and exposes lightweight preference hooks.
+- ✅ **P5 — Session ingestion**: adds the host-neutral `IngestedSession` boundary and a real DeepSeek Harness adapter for durable `session.jsonl` logs, including local discovery and DSH's default concatenated Zstandard storage.
+- ✅ **P6 — Real-session evaluation / calibration**: turns ingested sessions into bounded human-review cases, generates deterministic pairwise comparisons, records keep/drop + fun ratings + missed moments, and aggregates ranking/award calibration metrics.
 
 ## Public APIs
 
@@ -58,7 +63,7 @@ For analysis-only use:
 const moments = analyzeMoments(messages);
 ```
 
-For the complete product path:
+For a complete Wrapped from normalized messages:
 
 ```ts
 const report = createWrappedReport(messages, {
@@ -66,33 +71,57 @@ const report = createWrappedReport(messages, {
 });
 
 console.log(renderWrappedText(report));
-// or
-console.log(renderWrappedMarkdown(report));
 ```
 
-`createWrappedReport()` keeps P3 ranked candidates out of the share payload by default. Set `includeRankedMoments: true` only for debugging/evaluation.
+For current DeepSeek Harness local sessions:
+
+```ts
+const sessions = await loadDshSessions({ maxSessions: 20 });
+const report = createWrappedReport(sessions[0].messages);
+```
+
+DSH discovery follows the harness convention: `$DSH_HOME/sessions` when `DSH_HOME` is set, otherwise `~/.dsh/sessions`. It understands plaintext `session.jsonl` and the current default `session.jsonl.zstd` layout. Direct Zstandard reads require a Node runtime with the Zstandard `node:zlib` API; exported plaintext `session.jsonl` remains ingestible on older supported Node runtimes.
+
+Reasoning blocks are **not included by default**. `includeVisibleReasoning: true` is an explicit caller choice for hosts/surfaces where that reasoning was actually exposed to the user.
+
+For P6 calibration:
+
+```ts
+const batch = await prepareLocalDshEvaluation({
+  ingest: { maxSessions: 50 },
+  evaluation: { topMoments: 8, maxPairwiseTasks: 12 },
+});
+
+// After collecting human SessionHumanReview[]:
+const calibration = buildCalibrationReport(batch.cases, reviews);
+```
+
+P6 evaluation cases keep only the selected/top Moment material needed for review; they do not copy entire transcripts into the benchmark dataset.
 
 Existing QuoteScorer, CatchphraseClusterer, BoomerangDetector, FacetScorer, and SessionAnalyzer APIs remain as compatibility surfaces while new work uses the Moment Engine pipeline.
 
 See `docs/moment-engine-architecture.md` for architecture and phase boundaries.
 
-## Planned adapters
+## Host coverage
 
-- DeepSeek Harness (DSH)
-- Claude Code
-- OpenAI Codex
-- OpenCode (later)
+- ✅ DeepSeek Harness (DSH) — current durable JSONL/Zstandard session format
+- ⏭️ Claude Code — next adapter
+- ⏭️ OpenAI Codex — next adapter
+- ⏭️ OpenCode — later
+
+The ingestion boundary is host-neutral; adding another adapter must end in the same `TranscriptMessage[]` model instead of changing P0–P6 semantics.
 
 ## Design principles
 
-1. **Local-first by default.** P0–P4 work without another LLM call.
-2. **Use only exposed transcript data.** Agent Wrapped analyzes visible messages made available by the host. It does not attempt to access hidden chain-of-thought.
-3. **Original wording matters.** P3.5/P4 preserve the agent’s source wording instead of regenerating “funnier” quotes.
+1. **Local-first by default.** P0–P6 work without another LLM call.
+2. **Use only exposed transcript data.** Agent Wrapped analyzes visible messages made available by the host. It does not attempt to recover hidden chain-of-thought.
+3. **Original wording matters.** Award/report layers preserve the agent’s source wording instead of regenerating “funnier” quotes.
 4. **Fun before analytics.** Token charts are optional; the memorable moments are the product.
-5. **Cross-agent from day one.** Core event, relation, moment, and award definitions stay independent from any single model or runtime.
+5. **Cross-agent core.** Core event, relation, moment, award, and evaluation definitions stay independent from any single model/runtime.
 6. **Fun score and confidence are different.** A moment can be hilarious while still requiring semantic verification before it is shown as fact.
 7. **No award-specific parser sprawl.** New ideas should first be modeled as an Event, Relation, or Moment composition before adding presentation logic.
-8. **Do not force a Wrapped.** If nothing clears the quality threshold, P4 can legitimately return zero awards.
+8. **Do not force a Wrapped.** If nothing clears the quality threshold, the report can legitimately contain zero awards.
+9. **Calibrate on people, not synthetic regex wins.** P6 measures pairwise human preference, award keep-rate, and missed moments before a semantic reranker is justified.
 
 ## Development
 
@@ -111,12 +140,14 @@ npm run test:moment-builder
 npm run test:moment-ranker
 npm run test:award-composer
 npm run test:wrapped
-npm run test:moments
+npm run test:ingest
+npm run test:evaluation
+npm run test:p5-p6
 ```
 
 ## Status
 
-🚧 Early prototype. P0–P4 are now implemented locally. The next product work is real DSH/Claude Code/Codex transcript adapters plus a larger human-preference corpus to calibrate selection quality without overfitting to synthetic phrases.
+🚧 Early prototype. P0–P6 are implemented. The next work is expanding host adapters (Claude Code / Codex), running the P6 harness over a larger real-session corpus, and only then deciding whether an optional semantic reranker is justified by measured failures.
 
 ## License
 
