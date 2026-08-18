@@ -9,9 +9,9 @@ function dsh(text) {
   return { role: "assistant", host: "dsh", text };
 }
 
-test("P3 ranks a real before-after boomerang above generic status one-liners", () => {
+test("P3 ranks a real before-after boomerang above a standalone discovery line", () => {
   const graph = buildMomentGraph([
-    dsh("现在问题已经非常明确了。"),
+    dsh("这次真的找到根因了！！！"),
     dsh("我已经确认，可以完全排除缓存。"),
     dsh("继续检查provider。"),
     dsh("最终根因还是缓存。"),
@@ -19,15 +19,15 @@ test("P3 ranks a real before-after boomerang above generic status one-liners", (
   const moments = buildMoments(graph);
   const ranked = rankMoments(graph, moments);
   const boomerang = ranked.find((moment) => moment.type === "boomerang");
-  const clarity = ranked.find(
-    (moment) => moment.type === "one_liner" && moment.primaryText === "现在问题已经非常明确了。",
+  const discovery = ranked.find(
+    (moment) => moment.type === "one_liner" && moment.primaryText === "这次真的找到根因了！！！",
   );
 
   assert.ok(boomerang);
-  assert.ok(clarity);
-  assert.ok(boomerang.scores.funScore > clarity.scores.funScore);
-  assert.ok(boomerang.scores.contextPayoff > clarity.scores.contextPayoff);
-  assert.ok(boomerang.scores.surprise > clarity.scores.surprise);
+  assert.ok(discovery);
+  assert.ok(boomerang.scores.funScore > discovery.scores.funScore);
+  assert.ok(boomerang.scores.contextPayoff > discovery.scores.contextPayoff);
+  assert.ok(boomerang.scores.surprise > discovery.scores.surprise);
 });
 
 test("funScore stays separate from confidence for uncertain but entertaining candidates", () => {
