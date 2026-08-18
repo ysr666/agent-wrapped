@@ -17,7 +17,7 @@ A line can lose the single `Quote of the session` slot and still be excellent ma
 The current analyzer can produce:
 
 - 🏆 **Quote of the session** — highest one-off quote potential;
-- 📢 **Catchphrase** — exact-normalized repeated wording;
+- 📢 **Catchphrase** — repeated wording or conservative local paraphrase clusters;
 - 🐺 **Called it too early** — repeated discovery/root-cause declarations, even when wording differs;
 - 🍾 **Premature celebration** — a victory-lap line followed soon by an explicit reversal;
 - 🧠 **Plot twist** — strongest explicit self-reversal/correction;
@@ -33,7 +33,7 @@ v0 also reports lightweight counts used by the recap:
 
 - assistant message count;
 - extracted candidate-unit count;
-- repeated exact-normalized phrase groups;
+- repeated catchphrase-cluster count;
 - discovery declarations;
 - reversal moments;
 - progress announcements;
@@ -41,13 +41,31 @@ v0 also reports lightweight counts used by the recap:
 
 These are entertainment/event counts, not productivity analytics.
 
+## CatchphraseClusterer integration
+
+Catchphrases are no longer limited to exact-normalized strings.
+
+The local `CatchphraseClusterer` first handles exact normalized repetition, then known bilingual verbal-tic families, then conservative fuzzy overlap for phrases outside those families.
+
+For example, these can count as one catchphrase family:
+
+- `现在问题已经非常明确了。`
+- `问题现在已经很清楚了。`
+- `这下问题就非常明确了！`
+
+The award preserves a canonical representative, all observed variants, total count, message indexes, and the detected cluster family when available.
+
+Likewise, varied declarations such as:
+
+- `这次真的找到根因了！！！`
+- `真正的根因已经确认了！`
+- `终于定位到根因了！！！`
+
+can share repetition energy. That makes the 📢 catchphrase and 🐺 wolf-cry signals much more useful on real long sessions where the agent rarely repeats a sentence character-for-character.
+
+The clusterer is still deliberately conservative and local-first. It does not pretend to merge every semantic paraphrase; an optional embedding/semantic layer can improve recall later.
+
 ## Important v0 boundaries
-
-### Catchphrases are exact-normalized, not semantic yet
-
-`现在问题已经非常明确了。` and the same sentence with different punctuation will cluster. Semantically similar variants such as `问题现在很清楚` are not merged yet.
-
-That later belongs in a semantic clustering layer.
 
 ### Wolf-cry is event-count based
 
@@ -79,6 +97,7 @@ A long DSH session might produce:
 
 📢 口癖王
 “现在问题已经非常明确了。” × 6
+variants: “问题现在已经很清楚了。” / “这下问题就明确了！”
 
 🐺 狼来了奖
 宣布发现/根因 7 次
