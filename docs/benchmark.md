@@ -1,126 +1,107 @@
-# QuoteScorer Benchmark
+# Regression benchmarks
 
-QuoteScorer v0 has a small regression benchmark so scoring changes are judged against examples instead of being tuned by intuition alone.
+Agent Wrapped uses layered regression tests so changes are judged against examples instead of being tuned by intuition alone.
 
-## What is in the benchmark
+The suite now mirrors the Moment Engine architecture:
 
-The executable corpus is now split into three fixture sets:
+```text
+Unit / quote regression
+        ↓
+Event regression        (P0)
+        ↓
+Graph regression        (P1)
+        ↓
+Moment regression       (P2, next)
+        ↓
+Human preference        (later, product truth)
+```
+
+## Quote / surface benchmark
+
+The executable quote corpus is split into three fixture sets:
 
 - `test/fixtures/publicQuoteBenchmarks.mjs` — source-inspired positive/regression cases;
 - `test/fixtures/hardNegativeBenchmarks.mjs` — decoys for the **single quote-of-the-session ranking**;
-- `test/fixtures/funCandidateBenchmarks.mjs` — lines that may not win the gold-quote slot but are still valuable for other awards.
+- `test/fixtures/funCandidateBenchmarks.mjs` — lines that may not win the gold-quote slot but are still valuable for other moments.
 
-That distinction is important: **not the best quote does not mean not interesting.**
+That distinction remains important: **not the best quote does not mean not interesting.**
 
-A line such as `这次真的找到根因了！！！` may be only a middling one-off quote, but if it appears six times it is excellent material for the wolf-cried-again award. `现在问题已经非常明确了。` can be weak as a one-off gold quote and simultaneously excellent as a catchphrase.
+The public-inspired corpus covers Claude Code, Codex, Gemini CLI, and Chinese synthetic DSH guardrails. The cases are source-inspired regression examples rather than copied transcript mirrors. Public source notes live in `docs/research-corpus.md`.
 
-## Positive / public-inspired cases
+Hard negatives only test whether a tempting surface line should beat a stronger one-off quote. They do not globally label the losing line as boring.
 
-The positive corpus currently covers:
+## P0 Event benchmark
 
-- Claude Code: explicit self-correction / reversal after a confident diagnosis;
-- Codex: repeated "exact defect" style discovery claims versus a later retraction;
-- Gemini CLI: enthusiastic discovery language versus a correction cascade;
-- Chinese: a synthetic DSH guardrail that ensures a dramatic route reversal outranks generic status language.
+`test/eventExtractor.test.mjs` verifies the shared event layer rather than a downstream award.
 
-The public cases are **source-inspired regression cases**, not copied transcripts. We keep short observed trigger phrases where useful and synthesize the surrounding lines. This prevents the test suite from turning into a transcript mirror or overfitting to one exact conversation.
+Current guardrails include:
 
-Public source notes are collected in `docs/research-corpus.md`.
+- one dramatic line can expose discovery + reversal + confidence simultaneously;
+- `不是缓存，而是配置` produces two structured topic claims with opposite stances;
+- neutral assistant text remains available for later repetition analysis;
+- positive/negative verbal-family polarity is separated;
+- user/tool text does not become assistant events.
 
-## Quote-ranking hard negatives
+Run:
 
-Hard negatives are negative only for one question: **should this beat the intended line as the single quote of the session?**
-
-They are intentionally plausible false winners containing surface features a naive quote scorer may overvalue:
-
-- lots of `!!!` / `！！！` without enough payoff;
-- celebratory filler such as "Great news" / "终于修好了";
-- confident root-cause claims with no reversal;
-- bare apologies that acknowledge an error but add little content;
-- trigger-word stuffing such as "root cause", "exact issue", "重大突破", and "完全确定" packed into one line.
-
-These lines are not globally labeled "boring". Some are deliberately fun and should survive in other categories.
-
-Each hard-negative case has one intended quote and several tempting decoys. The test only asserts that the intended quote outranks every decoy for the gold-quote slot.
-
-## Fun / category candidates
-
-DeepSeek/DSH-style lines have moved out of the hard-negative set into `funCandidateBenchmarks.mjs`.
-
-The current categories include:
-
-- **clarity catchphrase** — repeated “现在问题已经非常清楚/明确了”;
-- **progress announcement** — “重大进展”“已经非常接近根因”; 
-- **wolf-cried-again** — repeated “这次真的找到根因了”; 
-- **emotional peak** — “离谱”“诡异”“这下有意思了”;
-- **premature celebration** — “应该修好了”“这次应该真的没问题了”;
-- **self-congratulation** — “漂亮”“完美命中”; 
-- **full plot twist** — one line can score strongly across quote, discovery, reversal, and drama at the same time.
-
-These fixtures use the multi-dimensional `scoreQuoteFacets()` helper. The current facets are:
-
-```text
-quote
- drama
- discovery
- reversal
- progress
- celebration
- catchphrase
- wolfCry
+```bash
+npm run test:event
 ```
 
-The facet scores are candidate signals, not final awards. `catchphrase` and `wolfCry` require a repetition count from the session; a single isolated line cannot prove either one. Likewise, a modest celebration line may become hilarious only after later context shows that the bug was not fixed.
+## P1 Moment Graph benchmark
 
-## What the tests assert
+`test/momentGraph.test.mjs` verifies relationships independently from award names.
 
-The tests intentionally avoid locking arbitrary raw numbers where relative behavior is enough.
+Current guardrails include:
 
-For each positive benchmark, QuoteScorer must:
+- DSH-style clarity paraphrases form repetition/similarity clusters;
+- opposite-polarity variants do not merge;
+- `排除缓存 → 根因缓存` creates `same_topic + contradicts` edges;
+- explicit later self-correction can create `retracts`;
+- chronological adjacency creates `followed_by`;
+- celebration followed by correction creates `celebrates_before`;
+- user/tool content cannot create assistant graph relations.
 
-1. extract the expected dramatic line;
-2. rank it first within that mini-session;
-3. rank it above generic discovery/status lines from the same case.
+Run:
 
-For each quote-ranking hard-negative benchmark, the intended quote must score higher than every tempting decoy.
+```bash
+npm run test:graph
+```
 
-For each fun-category benchmark, the line must retain the expected facet signal instead of being discarded merely because it is not the gold quote.
+## Compatibility benchmarks
 
-Additional guardrails verify that:
+The old public APIs are still tested during the migration:
 
-- dramatic Chinese reversals expose discovery + reversal + confidence signals;
-- generic "problem is clear" language receives a quote-template penalty;
-- exact repetition lowers one-off quote score while increasing catchphrase value;
-- repeated root-cause declarations can produce a strong wolf-cried-again signal;
-- repeated DSH-style clarity announcements can lose the gold-quote slot while remaining a strong catchphrase;
-- commands/code noise are penalized for quote ranking;
-- user/tool text is not accidentally treated as an assistant quote.
+```bash
+npm run test:quote
+npm run test:catchphrase
+npm run test:boomerang
+npm run test:session
+```
 
-## Running locally
+`CatchphraseClusterer` now delegates to repetition graph logic. `BoomerangDetector` delegates to contradiction graph logic. `FacetScorer` and QuoteScorer consume the shared event layer for semantic cues.
+
+That means compatibility tests also act as regression checks that P0/P1 did not silently break the current awards-first prototype.
+
+## Full suite
 
 ```bash
 npm test
 ```
 
-For the quote suite only:
-
-```bash
-npm run test:quote
-```
-
-The repository also runs the test suite on pushes to `main` and on pull requests through GitHub Actions.
+The repository workflow runs type-checking and the full test suite on pushes to `main` and pull requests.
 
 ## Benchmark philosophy
 
-This is a regression suite, not a scientific model leaderboard.
+Raw scores are not the product truth. Tests should prefer behavioral orderings and structured relationships over arbitrary fixed numbers.
 
-A future scorer should be allowed to change raw scores as long as the important behavioral distinctions stay correct. When real DSH transcripts are added, they should be anonymized or represented by minimal derived fixtures unless the original text is intentionally public.
+The benchmark stack should evolve into four levels:
 
-Over time we should maintain four kinds of cases:
+1. **Unit / scorer regression** — formatting, extraction, local ranking and hard-negative behavior.
+2. **Event regression** — what happened in each transcript unit.
+3. **Graph / Moment regression** — which events repeat, contradict, retract, or form a larger story.
+4. **Human preference** — if a person can only keep one or a few moments, which ones are actually worth putting in Wrapped?
 
-- **positive** — obvious memorable quotes that should rank highly;
-- **quote-ranking hard negatives** — tempting decoys that should not win the single gold-quote slot;
-- **fun/category candidates** — interesting lines that belong to catchphrase, wolf-cry, celebration, progress, or emotional awards;
-- **contextual cases** — moments whose value only emerges from earlier/later claims.
+The fourth layer is the most important long-term evaluation. Synthetic examples are useful for preventing regressions, but they must not become a closed loop where we write rules, write examples for those rules, and then call passing tests proof that the output is funny.
 
-The contextual category will eventually require the semantic/context layer; QuoteScorer v0 should not pretend local surface rules solve it already.
+When real DSH or other agent transcripts are added, they should be anonymized or represented by minimal derived fixtures unless the original text is intentionally public.
