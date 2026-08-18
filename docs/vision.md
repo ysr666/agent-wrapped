@@ -45,6 +45,41 @@ Repeated declarations that the issue is solved, understood, or traced to a root 
 ### 5. Plot twist
 A sudden change in direction, especially when the agent explicitly retracts or overturns an earlier assumption.
 
+### 6. Emotional peak / celebration
+Short lines such as “离谱！！！”, “完美命中！！！”, or “这次应该真的没问题了！” may be entertaining even when they are not the best standalone quote. They should remain eligible for emotional-peak, celebration, or premature-victory awards.
+
+## Fun-first scoring principle
+
+**Not the quote-of-the-session winner does not mean not interesting.**
+
+Agent Wrapped should not collapse every line into a single good/bad score. A sentence can be weak in one dimension and excellent in another:
+
+```text
+“现在问题已经非常明确了。”
+quote: medium/low
+catchphrase: very high when repeated
+
+“这次真的找到根因了！！！”
+quote: medium/high
+discovery: high
+wolf-cried-again: extremely high when repeated
+
+“完美命中！！！”
+quote: medium
+celebration: high
+emotional peak: high
+
+“重大发现！！！我们前面的路线完全错了！”
+quote: very high
+discovery: high
+reversal: very high
+drama: very high
+```
+
+The current local prototype therefore treats quote ranking as only one facet. Other candidate facets include drama, discovery, reversal, progress, celebration, catchphrase, and repeated root-cause / wolf-cry potential.
+
+Final awards should be decided from the whole session, not by throwing away lines that fail to win one ranking.
+
 ## MVP boundary
 
 The first prototype should **not** try to become a full telemetry dashboard.
@@ -54,6 +89,8 @@ It should answer three questions well:
 1. What was the funniest / most dramatic line in this session?
 2. What did the agent keep saying?
 3. What was the biggest reversal?
+
+Then it can add lightweight side awards such as emotional peak, premature celebration, and wolf-cried-again without turning into a productivity dashboard.
 
 ## Extraction strategy
 
@@ -69,8 +106,9 @@ Start local and deterministic:
    - explicit self-correction
    - unusual wording
    - confidence markers
-5. Detect contradiction candidates between nearby or semantically related claims.
-6. Optionally allow an LLM reranker later, but do not require it for the default experience.
+5. Keep additional fun-category facets instead of discarding non-winning lines.
+6. Detect contradiction candidates between nearby or semantically related claims.
+7. Optionally allow an LLM reranker later, but do not require it for the default experience.
 
 ## Output concept
 
@@ -89,6 +127,12 @@ A single session could end with:
 >
 > **🐺 Root cause declarations**  
 > 7
+>
+> **🍾 Earliest victory lap**  
+> “This should be fixed now.”
+>
+> **😱 Emotional peak**  
+> “这也太诡异了！！！”
 
 ## Privacy boundary
 
