@@ -44,7 +44,7 @@ export function buildSequenceRelations(
     const celebration = Math.max(celebrationStrength, resolutionStrength);
     if (celebration < 60) continue;
 
-    let best:
+    let firstReversal:
       | { event: Event; reversal: number; distance: number }
       | undefined;
 
@@ -60,34 +60,34 @@ export function buildSequenceRelations(
         getEventStrength(after, "correction"),
       );
       if (reversal < 70) continue;
-      if (!best || reversal > best.reversal || (reversal === best.reversal && distance < best.distance)) {
-        best = { event: after, reversal, distance };
-      }
+
+      firstReversal = { event: after, reversal, distance };
+      break;
     }
 
-    if (!best) continue;
-    const closeness = Math.max(0, 1 - best.distance / Math.max(1, celebrationWindowMessages));
-    // A concrete “fixed / solved / no problem now” claim is stronger false-dawn
-    // evidence than a generic cheer such as “Perfect!”. Keep both, but prefer the
-    // explicit resolution claim when several celebrations are later overturned.
+    if (!firstReversal) continue;
+    const closeness = Math.max(
+      0,
+      1 - firstReversal.distance / Math.max(1, celebrationWindowMessages),
+    );
     const resolutionBonus = resolutionStrength > 0 ? 20 : 0;
     relations.push({
-      id: `celebrates_before:${before.id}->${best.event.id}`,
+      id: `celebrates_before:${before.id}->${firstReversal.event.id}`,
       fromEventId: before.id,
-      toEventId: best.event.id,
+      toEventId: firstReversal.event.id,
       type: "celebrates_before",
       strength: clamp(
         celebration * 0.45 +
-          best.reversal * 0.45 +
+          firstReversal.reversal * 0.45 +
           closeness * 10 +
           resolutionBonus,
       ),
-      confidence: clamp(Math.min(before.confidence, best.event.confidence) * 0.9 + 10),
-      distance: best.distance,
+      confidence: clamp(Math.min(before.confidence, firstReversal.event.confidence) * 0.9 + 10),
+      distance: firstReversal.distance,
       reasons: [
         resolutionStrength > 0
-          ? "explicit resolution claim followed by an explicit correction or reversal"
-          : "celebration followed by an explicit correction or reversal",
+          ? "explicit resolution claim followed by the first explicit correction or reversal"
+          : "celebration followed by the first explicit correction or reversal",
       ],
     });
   }
