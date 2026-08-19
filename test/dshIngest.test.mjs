@@ -12,6 +12,7 @@ import {
   resolveDshSessionsRoot,
 } from "../dist/ingest/dshFilesystem.js";
 
+/** Mirrors the current DSH SessionEventMap shape from @deepseek-ai/dsh-session. */
 function dshJsonl() {
   return [
     JSON.stringify({
@@ -25,7 +26,13 @@ function dshJsonl() {
       type: "user/message",
       seq: 1,
       time: 1784973850103,
-      data: { content: [{ type: "text", text: "帮我看看这个问题" }], surfaceOp: "append" },
+      surfaceOp: "append",
+      data: {
+        id: "user-message-1",
+        role: "user",
+        content: [{ type: "text", text: "帮我看看这个问题" }],
+        source: { kind: "user" },
+      },
     }),
     JSON.stringify({
       type: "session/title",
@@ -38,27 +45,60 @@ function dshJsonl() {
       type: "assistant/chunk",
       seq: 3,
       time: 1784973850200,
-      data: { chunk: { type: "text-delta", index: 1, text: "重大发现" } },
+      data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 1, text: "重大发现" } },
     }),
     JSON.stringify({
       type: "assistant/message",
       seq: 4,
       time: 1784973850300,
+      surfaceOp: "append",
+      sourceEventSeqs: [3],
       data: {
         turn: 1,
         step: 1,
-        content: [
-          { type: "reasoning", text: "internal-ish reasoning surface" },
-          { type: "text", text: "重大发现！！！我们前面的路线完全错了！" },
-        ],
-        provenance: { provider: "deepseek-official", model: "deepseek-v4-flash" },
+        message: {
+          id: "assistant-message-1",
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "internal-ish reasoning surface" },
+            { type: "text", text: "重大发现！！！我们前面的路线完全错了！" },
+          ],
+          source: {
+            kind: "model",
+            provider: "deepseek-official",
+            model: "deepseek-v4-flash",
+          },
+        },
       },
     }),
     "",
   ].join("\n");
 }
 
-test("P5 parses durable DSH messages without double-counting streaming chunks", () => {
+function legacyDshJsonl() {
+  return [
+    JSON.stringify({
+      type: "session",
+      version: 0,
+      id: "legacy-session",
+      createdAt: 1784973850091,
+    }),
+    JSON.stringify({
+      type: "assistant/message",
+      seq: 1,
+      time: 1784973850300,
+      data: {
+        turn: 1,
+        step: 1,
+        content: [{ type: "text", text: "旧格式也应该继续能读。" }],
+        provenance: { provider: "legacy-provider", model: "legacy-model" },
+      },
+    }),
+    "",
+  ].join("\n");
+}
+
+test("P5 parses current durable DSH messages without double-counting streaming chunks", () => {
   const session = parseDshSessionJsonl(dshJsonl());
   assert.equal(session.id, "session-123");
   assert.equal(session.title, "排查缓存问题");
@@ -67,10 +107,15 @@ test("P5 parses durable DSH messages without double-counting streaming chunks", 
   assert.equal(session.model, "deepseek-v4-flash");
   assert.equal(session.messages.length, 2);
   assert.equal(session.messages[0].role, "user");
+  assert.equal(session.messages[0].metadata?.dshMessageId, "user-message-1");
   assert.equal(session.messages[1].role, "assistant");
   assert.equal(session.messages[1].text, "重大发现！！！我们前面的路线完全错了！");
+  assert.equal(session.messages[1].metadata?.dshMessageId, "assistant-message-1");
+  assert.equal(session.messages[1].metadata?.dshMessageShape, "current");
+  assert.equal(session.messages[1].metadata?.provider, "deepseek-official");
   assert.ok(!session.messages.some((message) => message.text === "重大发现"));
   assert.ok(session.diagnostics.some((entry) => entry.code === "reasoning-skipped"));
+  assert.ok(!session.diagnostics.some((entry) => entry.code === "no-visible-assistant-messages"));
 });
 
 test("P5 only includes DSH reasoning when explicitly marked as visible by the caller", () => {
@@ -80,6 +125,27 @@ test("P5 only includes DSH reasoning when explicitly marked as visible by the ca
   assert.equal(assistant[0].text, "internal-ish reasoning surface");
   assert.equal(assistant[0].metadata?.visibleReasoning, true);
   assert.equal(assistant[1].text, "重大发现！！！我们前面的路线完全错了！");
+});
+
+test("P5 retains compatibility with the earlier direct-content assistant envelope", () => {
+  const session = parseDshSessionJsonl(legacyDshJsonl());
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.messages[0].role, "assistant");
+  assert.equal(session.messages[0].text, "旧格式也应该继续能读。");
+  assert.equal(session.messages[0].metadata?.dshMessageShape, "legacy");
+  assert.equal(session.provider, "legacy-provider");
+  assert.equal(session.model, "legacy-model");
+});
+
+test("P5 emits an explicit warning when assistant/message exists but its envelope is unknown", () => {
+  const broken = [
+    JSON.stringify({ type: "session", version: 0, id: "broken-session", createdAt: 1784973850091 }),
+    JSON.stringify({ type: "assistant/message", seq: 1, data: { turn: 1, step: 1, response: "unknown" } }),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(broken);
+  assert.ok(session.diagnostics.some((entry) => entry.code === "assistant-message-shape-unrecognized"));
+  assert.ok(session.diagnostics.some((entry) => entry.code === "no-visible-assistant-messages"));
 });
 
 test("P5 resolves the DSH sessions root from DSH_HOME", () => {
