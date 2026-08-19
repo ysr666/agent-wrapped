@@ -177,6 +177,17 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
 
   out(stdout, `P7 workspace 已更新：${refreshed.path}`);
   out(stdout, `当前 ${refreshed.workspace.cases.length} 场；新增 ${refreshed.addedSessions} 场；保留人工评测 ${refreshed.preservedReviews} 场。`);
+  out(
+    stdout,
+    `解析：${refreshed.ingestion.sessionsWithAssistantMessages}/${refreshed.ingestion.discoveredSessions} 场含 assistant 文本，` +
+      `共 ${refreshed.ingestion.assistantMessages} 条；${refreshed.ingestion.sessionsWithMoments} 场产生 Moment 候选。`,
+  );
+  if (refreshed.ingestion.ingestionWarnings > 0) {
+    out(stdout, `P5 产生 ${refreshed.ingestion.ingestionWarnings} 条 ingestion warning。`);
+  }
+  if (refreshed.ingestion.assistantMessages > 0 && refreshed.ingestion.sessionsWithMoments === 0) {
+    out(stdout, "警告：已经读到 assistant 文本，但整批没有任何 Moment 候选；请先排查 P0–P3，而不是开始人工评测。");
+  }
   if (refreshed.invalidatedReviews > 0) {
     out(stdout, `有 ${refreshed.invalidatedReviews} 场因候选集变化而撤销旧评测，避免把旧标签套到新结果。`);
   }
