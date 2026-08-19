@@ -12,10 +12,13 @@ export interface ReviewWorkspaceSource {
  * never the original full transcript artifacts.
  */
 export interface ReviewWorkspace {
-  version: 1;
+  version: 2;
   createdAt: string;
   updatedAt: string;
   source: ReviewWorkspaceSource;
+  /** Human-review presentation contract bound to this workspace. */
+  protocolVersion: number;
+  presentationLocale: PresentationLocale;
   cases: SessionEvaluationCase[];
   caseFingerprints: Record<string, string>;
   reviews: SessionHumanReview[];
@@ -54,7 +57,7 @@ export interface ReviewIO {
 export interface ReviewSessionOptions {
   /** Persist partial progress after every accepted answer. */
   onCheckpoint?: (review: SessionHumanReview) => void | Promise<void>;
-  /** Reader-facing presentation language. P7 CLI defaults to zh-CN. */
+  /** Reader-facing presentation language. P7 CLI defaults to workspace locale. */
   locale?: PresentationLocale;
 }
 

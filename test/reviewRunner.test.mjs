@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { reviewEvaluationCase } from "../dist/review/reviewer.js";
+import { CURRENT_REVIEW_PROTOCOL_VERSION } from "../dist/review/protocol.js";
 import { calibrateReviewWorkspace, saveReviewCheckpoint } from "../dist/review/runner.js";
 import {
   computeReviewProgress,
@@ -13,11 +14,11 @@ import {
   saveReviewWorkspace,
 } from "../dist/review/workspace.js";
 
-function moment(id, selected, awardKind, awardId, funScore = 80) {
+function moment(id, selected, awardKind, awardId, funScore = 80, text = `moment ${id}`) {
   return {
     id,
     type: "one_liner",
-    primaryText: `moment ${id}`,
+    primaryText: text,
     relatedTexts: [],
     funScore,
     confidence: 90,
@@ -28,9 +29,9 @@ function moment(id, selected, awardKind, awardId, funScore = 80) {
 }
 
 function evaluationCase(sessionId = "s1", suffix = "") {
-  const first = moment(`m1${suffix}`, true, "quote", `award:q${suffix}`, 90);
-  const second = moment(`m2${suffix}`, true, "emotional-peak", `award:e${suffix}`, 75);
-  const rejected = moment(`m3${suffix}`, false, undefined, undefined, 70);
+  const first = moment(`m1${suffix}`, true, "quote", `award:q${suffix}`, 90, "重大发现！！！我们前面的路线完全错了！");
+  const second = moment(`m2${suffix}`, true, "emotional-peak", `award:e${suffix}`, 75, "这也太诡异了！！！");
+  const rejected = moment(`m3${suffix}`, false, undefined, undefined, 70, "等等，这里还有问题。");
   return {
     version: 1,
     sessionId,
@@ -50,16 +51,23 @@ function evaluationCase(sessionId = "s1", suffix = "") {
   };
 }
 
+function reviewMeta(locale = "zh-CN") {
+  return { protocolVersion: CURRENT_REVIEW_PROTOCOL_VERSION, presentationLocale: locale };
+}
+
 function scriptedIO(answers) {
   const writes = [];
+  const prompts = [];
   let index = 0;
   return {
     writes,
+    prompts,
     io: {
       write(text) {
         writes.push(text);
       },
-      async ask() {
+      async ask(prompt) {
+        prompts.push(prompt);
         const answer = answers[index];
         index += 1;
         if (answer === undefined) throw new Error("scripted review ran out of answers");
@@ -72,35 +80,88 @@ function scriptedIO(answers) {
   };
 }
 
-test("P7 workspace refresh preserves reviews only while the evaluation case fingerprint is stable", () => {
+test("P7 workspace refresh preserves reviews only while case, protocol and locale stay stable", () => {
   const first = createOrRefreshReviewWorkspace(
     [evaluationCase("s1")],
     { host: "dsh", maxSessions: 30 },
+    undefined,
+    { presentationLocale: "zh-CN" },
   ).workspace;
-  first.reviews.push({ sessionId: "s1", awardVotes: [{ awardId: "award:q", verdict: "keep", fun: 5 }] });
+  first.reviews.push({
+    sessionId: "s1",
+    ...reviewMeta(),
+    awardVotes: [{ awardId: "award:q", verdict: "keep", fun: 5 }],
+  });
   first.completedSessionIds.push("s1");
 
   const stable = createOrRefreshReviewWorkspace(
     [evaluationCase("s1")],
     { host: "dsh", maxSessions: 30 },
     first,
+    { presentationLocale: "zh-CN" },
   );
   assert.equal(stable.preservedReviews, 1);
   assert.equal(stable.invalidatedReviews, 0);
   assert.equal(stable.workspace.completedSessionIds.length, 1);
 
+  const preservedLocale = createOrRefreshReviewWorkspace(
+    [evaluationCase("s1")],
+    { host: "dsh", maxSessions: 30 },
+    stable.workspace,
+  );
+  assert.equal(preservedLocale.workspace.presentationLocale, "zh-CN");
+  assert.equal(preservedLocale.preservedReviews, 1);
+
+  const languageChanged = createOrRefreshReviewWorkspace(
+    [evaluationCase("s1")],
+    { host: "dsh", maxSessions: 30 },
+    stable.workspace,
+    { presentationLocale: "en" },
+  );
+  assert.equal(languageChanged.preservedReviews, 0);
+  assert.equal(languageChanged.invalidatedReviews, 1);
+  assert.equal(languageChanged.workspace.reviews.length, 0);
+  assert.equal(languageChanged.workspace.completedSessionIds.length, 0);
+
   const changed = createOrRefreshReviewWorkspace(
     [evaluationCase("s1", "-changed")],
     { host: "dsh", maxSessions: 30 },
     stable.workspace,
+    { presentationLocale: "zh-CN" },
   );
   assert.equal(changed.preservedReviews, 0);
   assert.equal(changed.invalidatedReviews, 1);
-  assert.equal(changed.workspace.reviews.length, 0);
-  assert.equal(changed.workspace.completedSessionIds.length, 0);
 });
 
-test("P7 interactive reviewer checkpoints answers and can resume without asking them again", async () => {
+test("loading a legacy v1 workspace keeps cases but discards unversioned human labels", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-wrapped-legacy-"));
+  const store = join(directory, "workspace.json");
+  try {
+    const entry = evaluationCase("legacy");
+    await writeFile(store, JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      source: { host: "dsh", maxSessions: 1 },
+      cases: [entry],
+      caseFingerprints: { legacy: "old" },
+      reviews: [{ sessionId: "legacy", awardVotes: [{ awardId: "award:q", verdict: "drop" }] }],
+      completedSessionIds: ["legacy"],
+    }), "utf8");
+
+    const migrated = await loadReviewWorkspace(store);
+    assert.equal(migrated.version, 2);
+    assert.equal(migrated.protocolVersion, CURRENT_REVIEW_PROTOCOL_VERSION);
+    assert.equal(migrated.presentationLocale, "zh-CN");
+    assert.equal(migrated.cases.length, 1);
+    assert.equal(migrated.reviews.length, 0);
+    assert.equal(migrated.completedSessionIds.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("P7 interactive reviewer checkpoints answers and can resume only under the same protocol", async () => {
   const entry = evaluationCase("resume");
   const firstRun = scriptedIO(["k", "5", "q"]);
   const checkpoints = [];
@@ -112,6 +173,8 @@ test("P7 interactive reviewer checkpoints answers and can resume without asking 
 
   assert.equal(partial.completed, false);
   assert.equal(partial.quitRequested, true);
+  assert.equal(partial.review.protocolVersion, CURRENT_REVIEW_PROTOCOL_VERSION);
+  assert.equal(partial.review.presentationLocale, "zh-CN");
   assert.equal(partial.review.awardVotes.length, 1);
   assert.equal(checkpoints.length, 1);
 
@@ -123,9 +186,60 @@ test("P7 interactive reviewer checkpoints answers and can resume without asking 
   assert.equal(completed.review.pairwiseVotes.length, 1);
   assert.equal(completed.review.missedMoments.length, 1);
   assert.equal(completed.review.awardVotes.find((vote) => vote.awardId === "award:q")?.fun, 5);
+
+  const differentLocale = scriptedIO(["q"]);
+  const reset = await reviewEvaluationCase(entry, completed.review, differentLocale.io, { locale: "en" });
+  assert.equal(reset.review.presentationLocale, "en");
+  assert.equal(reset.review.awardVotes.length, 0);
+  assert.match(differentLocale.prompts[0], /Keep this card/u);
 });
 
-test("P7 persists local review state atomically and produces P6 calibration metrics", async () => {
+test("zh-CN pairwise review auto-skips unknown English instead of asking for a biased A/B vote", async () => {
+  const left = moment(
+    "english-left",
+    true,
+    "quote",
+    "award:english-left",
+    85,
+    "The cache layer owns stale state across the request boundary.",
+  );
+  const right = moment(
+    "english-right",
+    false,
+    undefined,
+    undefined,
+    80,
+    "A transport branch mutates the payload before serialization.",
+  );
+  const entry = {
+    version: 1,
+    sessionId: "language-coverage",
+    host: "dsh",
+    title: "Language coverage",
+    moments: [left, right],
+    pairwiseTasks: [{
+      id: "language-coverage:pair:1",
+      sessionId: "language-coverage",
+      left,
+      right,
+      predictedWinnerId: left.id,
+    }],
+  };
+  const scripted = scriptedIO(["s", "n"]);
+  const result = await reviewEvaluationCase(entry, undefined, scripted.io, { locale: "zh-CN" });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.review.awardVotes[0].verdict, "skip");
+  assert.deepEqual(result.review.pairwiseVotes[0], {
+    taskId: "language-coverage:pair:1",
+    winner: "skip",
+    reason: "language-coverage",
+  });
+  assert.equal(scripted.prompts.some((prompt) => prompt.includes("哪个更值得进 Wrapped")), false);
+  assert.match(scripted.writes.join("\n"), /已自动跳过，不计入 Pairwise accuracy/u);
+});
+
+test("P7 persists protocol metadata and excludes skipped awards from keep-rate", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agent-wrapped-p7-"));
   const store = join(directory, "workspace.json");
   try {
@@ -139,11 +253,12 @@ test("P7 persists local review state atomically and produces P6 calibration metr
       workspace,
       {
         sessionId: "persist",
+        ...reviewMeta(),
         awardVotes: [
           { awardId: "award:q", verdict: "keep", fun: 5 },
-          { awardId: "award:e", verdict: "drop", fun: 2 },
+          { awardId: "award:e", verdict: "skip" },
         ],
-        pairwiseVotes: [{ taskId: "persist:pair:1", winner: "left" }],
+        pairwiseVotes: [{ taskId: "persist:pair:1", winner: "skip", reason: "language-coverage" }],
         missedMoments: [{ text: "人工补录" }],
       },
       { store, completed: true },
@@ -158,9 +273,14 @@ test("P7 persists local review state atomically and produces P6 calibration metr
     assert.equal(progress.missedMoments, 1);
 
     const calibration = calibrateReviewWorkspace(reloaded);
-    assert.equal(calibration.report.awardKeepRate, 0.5);
-    assert.equal(calibration.report.averageAwardFun, 3.5);
-    assert.equal(calibration.report.pairwise.accuracy, 1);
+    assert.equal(calibration.report.awardVotes, 2);
+    assert.equal(calibration.report.awardDecisiveVotes, 1);
+    assert.equal(calibration.report.awardSkipped, 1);
+    assert.equal(calibration.report.awardKeepRate, 1);
+    assert.equal(calibration.report.averageAwardFun, 5);
+    assert.equal(calibration.report.pairwise.accuracy, 0);
+    assert.equal(calibration.report.pairwise.skipped, 1);
+    assert.equal(calibration.report.pairwise.languageCoverageSkipped, 1);
     assert.equal(calibration.report.missedMoments, 1);
   } finally {
     await rm(directory, { recursive: true, force: true });

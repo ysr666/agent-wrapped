@@ -15,6 +15,7 @@ import {
   refreshLocalDshReviewWorkspace,
   saveReviewCheckpoint,
 } from "./review/runner.js";
+import { CURRENT_REVIEW_PROTOCOL_VERSION, DEFAULT_REVIEW_LOCALE } from "./review/protocol.js";
 import { computeReviewProgress, loadReviewWorkspace, resolveReviewWorkspacePath } from "./review/workspace.js";
 import type { ReviewIO, ReviewWorkspaceProgress } from "./review/types.js";
 
@@ -84,9 +85,9 @@ function numberFlag(args: ParsedArgs, name: string, fallback: number): number {
   return numeric;
 }
 
-function localeFlag(args: ParsedArgs): PresentationLocale {
-  const value = stringFlag(args, "locale") ?? "zh-CN";
-  if (value === "zh-CN" || value === "en") return value;
+function parseLocale(value: string | undefined, fallback: PresentationLocale): PresentationLocale {
+  const resolved = value ?? fallback;
+  if (resolved === "zh-CN" || resolved === "en") return resolved;
   throw new Error("--locale must be zh-CN or en.");
 }
 
@@ -98,7 +99,7 @@ function helpText(): string {
   return `Agent Wrapped — local review runner
 
 Usage:
-  agent-wrapped dsh [--latest 30] [--root PATH] [--store PATH]
+  agent-wrapped dsh [--latest 30] [--root PATH] [--store PATH] [--locale zh-CN|en]
   agent-wrapped review [--store PATH] [--session ID] [--all] [--locale zh-CN|en]
   agent-wrapped calibration [--store PATH] [--json]
   agent-wrapped status [--store PATH] [--json]
@@ -114,13 +115,14 @@ DSH options:
   --top-moments N   P6 moments kept per session (default 8)
   --pairs N         pairwise review tasks per session (default 12)
   --reasoning       include reasoning blocks only if the host surface exposed them
+  --locale LOCALE   bind a new workspace to zh-CN (default) or en;
+                    existing workspace locale is preserved when omitted
 
 Review options:
   --session ID      review one specific session
   --all             continue through all incomplete sessions
-  --locale LOCALE   reader presentation: zh-CN (default) or en
-                    zh-CN adds local semantic hints for common English agent-speak
-                    while preserving the original quote as evidence
+  --locale LOCALE   optional safety check; must match workspace locale
+                    switch locale by re-running dsh --locale LOCALE, which invalidates old labels
 
 Storage:
   --store PATH      review-workspace.json path
@@ -144,8 +146,8 @@ function progressObject(progress: ReviewWorkspaceProgress): Record<string, numbe
 
 function printProgress(stdout: CliTextOutput, progress: ReviewWorkspaceProgress): void {
   out(stdout, `会话：${progress.completedSessions}/${progress.sessions} 已完成，${progress.remainingSessions} 待评`);
-  out(stdout, `奖项：${progress.awardVotes}/${progress.awardCards} 已评分`);
-  out(stdout, `二选一：${progress.pairwiseVotes}/${progress.pairwiseTasks} 已回答`);
+  out(stdout, `奖项：${progress.awardVotes}/${progress.awardCards} 已评分/跳过`);
+  out(stdout, `二选一：${progress.pairwiseVotes}/${progress.pairwiseTasks} 已回答/自动跳过`);
   out(stdout, `人工补录漏报：${progress.missedMoments}`);
 }
 
@@ -172,8 +174,13 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
   const pairs = numberFlag(args, "pairs", 12);
   const store = stringFlag(args, "store");
   const root = stringFlag(args, "root");
+  const requestedReviewLocale = stringFlag(args, "locale");
+  const reviewLocale = requestedReviewLocale === undefined
+    ? undefined
+    : parseLocale(requestedReviewLocale, DEFAULT_REVIEW_LOCALE);
   const refreshed = await refreshLocalDshReviewWorkspace({
     store,
+    reviewLocale,
     ingest: {
       maxSessions: latest,
       root,
@@ -186,6 +193,7 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
   });
 
   out(stdout, `P7 workspace 已更新：${refreshed.path}`);
+  out(stdout, `评测协议：v${refreshed.workspace.protocolVersion} · ${refreshed.workspace.presentationLocale}`);
   out(stdout, `当前 ${refreshed.workspace.cases.length} 场；新增 ${refreshed.addedSessions} 场；保留人工评测 ${refreshed.preservedReviews} 场。`);
   out(
     stdout,
@@ -199,7 +207,7 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
     out(stdout, "警告：已经读到 assistant 文本，但整批没有任何 Moment 候选；请先排查 P0–P3，而不是开始人工评测。");
   }
   if (refreshed.invalidatedReviews > 0) {
-    out(stdout, `有 ${refreshed.invalidatedReviews} 场因候选集变化而撤销旧评测，避免把旧标签套到新结果。`);
+    out(stdout, `有 ${refreshed.invalidatedReviews} 场因候选集/评测协议/展示语言变化而撤销旧评测，避免污染新结果。`);
   }
   printProgress(stdout, computeReviewProgress(refreshed.workspace));
   out(stdout, "下一步：agent-wrapped review");
@@ -211,9 +219,15 @@ async function commandStatus(args: ParsedArgs, stdout: CliTextOutput): Promise<n
   const workspace = await loadReviewWorkspace(store);
   const progress = computeReviewProgress(workspace);
   if (booleanFlag(args, "json")) {
-    out(stdout, JSON.stringify({ path: resolveReviewWorkspacePath(store), ...progressObject(progress) }, null, 2));
+    out(stdout, JSON.stringify({
+      path: resolveReviewWorkspacePath(store),
+      protocolVersion: workspace.protocolVersion,
+      presentationLocale: workspace.presentationLocale,
+      ...progressObject(progress),
+    }, null, 2));
   } else {
     out(stdout, `Workspace: ${resolveReviewWorkspacePath(store)}`);
+    out(stdout, `评测协议：v${workspace.protocolVersion} · ${workspace.presentationLocale}`);
     printProgress(stdout, progress);
   }
   return 0;
@@ -225,22 +239,41 @@ async function commandCalibration(args: ParsedArgs, stdout: CliTextOutput): Prom
   const { report, progress } = calibrateReviewWorkspace(workspace);
 
   if (booleanFlag(args, "json")) {
-    out(stdout, JSON.stringify({ progress, calibration: report }, null, 2));
+    out(stdout, JSON.stringify({
+      protocolVersion: workspace.protocolVersion,
+      presentationLocale: workspace.presentationLocale,
+      progress,
+      calibration: report,
+    }, null, 2));
     return 0;
   }
 
   out(stdout, "=== Agent Wrapped Calibration ===");
+  out(stdout, `评测协议：v${workspace.protocolVersion} · ${workspace.presentationLocale}`);
   printProgress(stdout, progress);
   out(stdout);
   out(stdout, `评测覆盖率：${(report.reviewCoverage * 100).toFixed(1)}%`);
-  out(stdout, `Award keep rate：${(report.awardKeepRate * 100).toFixed(1)}%`);
+  out(
+    stdout,
+    `Award keep rate：${(report.awardKeepRate * 100).toFixed(1)}% ` +
+      `(${report.awardDecisiveVotes} 个有效判断，${report.awardSkipped} 个 skip)`,
+  );
   out(stdout, `Award 平均好玩度：${report.averageAwardFun ?? "暂无评分"}`);
-  out(stdout, `Pairwise accuracy：${(report.pairwise.accuracy * 100).toFixed(1)}% (${report.pairwise.correct}/${report.pairwise.decisive})`);
+  out(
+    stdout,
+    `Pairwise accuracy：${(report.pairwise.accuracy * 100).toFixed(1)}% ` +
+      `(${report.pairwise.correct}/${report.pairwise.decisive}；skip ${report.pairwise.skipped}，` +
+      `其中语言覆盖 ${report.pairwise.languageCoverageSkipped})`,
+  );
   out(stdout, `人工发现漏报：${report.missedMoments}`);
   if (report.byAwardKind.length > 0) {
     out(stdout, "\n按奖项：");
     for (const kind of report.byAwardKind) {
-      out(stdout, `  ${kind.kind}: keep ${(kind.keepRate * 100).toFixed(1)}% (${kind.kept}/${kind.votes}), fun ${kind.averageFun ?? "-"}`);
+      out(
+        stdout,
+        `  ${kind.kind}: keep ${(kind.keepRate * 100).toFixed(1)}% ` +
+          `(${kind.kept}/${kind.decisive}, skip ${kind.skipped}), fun ${kind.averageFun ?? "-"}`,
+      );
     }
   }
   return 0;
@@ -252,8 +285,22 @@ async function commandReview(
   injectedIO?: ReviewIO,
 ): Promise<number> {
   const store = stringFlag(args, "store");
-  const locale = localeFlag(args);
   const workspace = await loadReviewWorkspace(store);
+  const requestedLocale = stringFlag(args, "locale");
+  const locale = parseLocale(requestedLocale, workspace.presentationLocale);
+  if (locale !== workspace.presentationLocale) {
+    throw new Error(
+      `This workspace is bound to ${workspace.presentationLocale}. ` +
+        `Run agent-wrapped dsh --latest ${workspace.source.maxSessions} --locale ${locale} to switch; ` +
+        "existing human labels will be invalidated instead of mixed across languages.",
+    );
+  }
+  if (workspace.protocolVersion !== CURRENT_REVIEW_PROTOCOL_VERSION) {
+    throw new Error(
+      `Workspace review protocol v${workspace.protocolVersion} is stale; run agent-wrapped dsh again before reviewing.`,
+    );
+  }
+
   const requestedSessionId = stringFlag(args, "session") ?? args.positional[0];
   const reviewAll = booleanFlag(args, "all");
   const terminal = injectedIO ? undefined : await makeTerminalReviewIO();
