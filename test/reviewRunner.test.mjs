@@ -57,14 +57,17 @@ function reviewMeta(locale = "zh-CN") {
 
 function scriptedIO(answers) {
   const writes = [];
+  const prompts = [];
   let index = 0;
   return {
     writes,
+    prompts,
     io: {
       write(text) {
         writes.push(text);
       },
-      async ask() {
+      async ask(prompt) {
+        prompts.push(prompt);
         const answer = answers[index];
         index += 1;
         if (answer === undefined) throw new Error("scripted review ran out of answers");
@@ -100,6 +103,14 @@ test("P7 workspace refresh preserves reviews only while case, protocol and local
   assert.equal(stable.preservedReviews, 1);
   assert.equal(stable.invalidatedReviews, 0);
   assert.equal(stable.workspace.completedSessionIds.length, 1);
+
+  const preservedLocale = createOrRefreshReviewWorkspace(
+    [evaluationCase("s1")],
+    { host: "dsh", maxSessions: 30 },
+    stable.workspace,
+  );
+  assert.equal(preservedLocale.workspace.presentationLocale, "zh-CN");
+  assert.equal(preservedLocale.preservedReviews, 1);
 
   const languageChanged = createOrRefreshReviewWorkspace(
     [evaluationCase("s1")],
@@ -180,6 +191,52 @@ test("P7 interactive reviewer checkpoints answers and can resume only under the 
   const reset = await reviewEvaluationCase(entry, completed.review, differentLocale.io, { locale: "en" });
   assert.equal(reset.review.presentationLocale, "en");
   assert.equal(reset.review.awardVotes.length, 0);
+  assert.match(differentLocale.prompts[0], /Keep this card/u);
+});
+
+test("zh-CN pairwise review auto-skips unknown English instead of asking for a biased A/B vote", async () => {
+  const left = moment(
+    "english-left",
+    true,
+    "quote",
+    "award:english-left",
+    85,
+    "The cache layer owns stale state across the request boundary.",
+  );
+  const right = moment(
+    "english-right",
+    false,
+    undefined,
+    undefined,
+    80,
+    "A transport branch mutates the payload before serialization.",
+  );
+  const entry = {
+    version: 1,
+    sessionId: "language-coverage",
+    host: "dsh",
+    title: "Language coverage",
+    moments: [left, right],
+    pairwiseTasks: [{
+      id: "language-coverage:pair:1",
+      sessionId: "language-coverage",
+      left,
+      right,
+      predictedWinnerId: left.id,
+    }],
+  };
+  const scripted = scriptedIO(["s", "n"]);
+  const result = await reviewEvaluationCase(entry, undefined, scripted.io, { locale: "zh-CN" });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.review.awardVotes[0].verdict, "skip");
+  assert.deepEqual(result.review.pairwiseVotes[0], {
+    taskId: "language-coverage:pair:1",
+    winner: "skip",
+    reason: "language-coverage",
+  });
+  assert.equal(scripted.prompts.some((prompt) => prompt.includes("哪个更值得进 Wrapped")), false);
+  assert.match(scripted.writes.join("\n"), /已自动跳过，不计入 Pairwise accuracy/u);
 });
 
 test("P7 persists protocol metadata and excludes skipped awards from keep-rate", async () => {
