@@ -20,6 +20,14 @@ export interface SaveReviewCheckpointOptions {
   completed?: boolean;
 }
 
+export interface DshReviewIngestionHealth {
+  discoveredSessions: number;
+  sessionsWithAssistantMessages: number;
+  assistantMessages: number;
+  sessionsWithMoments: number;
+  ingestionWarnings: number;
+}
+
 async function tryLoadExisting(store?: string): Promise<ReviewWorkspace | undefined> {
   try {
     return await loadReviewWorkspace(store);
@@ -32,11 +40,23 @@ async function tryLoadExisting(store?: string): Promise<ReviewWorkspace | undefi
 /** Discover current local DSH sessions, build P6 cases, and atomically refresh the review workspace. */
 export async function refreshLocalDshReviewWorkspace(
   options: RefreshLocalDshReviewOptions = {},
-): Promise<ReviewWorkspaceRefreshResult & { path: string }> {
+): Promise<ReviewWorkspaceRefreshResult & { path: string; ingestion: DshReviewIngestionHealth }> {
   const batch = await prepareLocalDshEvaluation({
     ingest: options.ingest,
     evaluation: options.evaluation,
   });
+
+  // A batch of several real sessions with zero assistant text is almost never a
+  // legitimate "quiet session" result. It means the adapter likely stopped
+  // understanding DSH's durable message envelope. Fail before overwriting a
+  // useful review workspace with empty cases.
+  if (batch.discoveredSessions >= 3 && batch.assistantMessages === 0) {
+    throw new Error(
+      `DSH ingestion recovered 0 visible assistant messages from ${batch.discoveredSessions} sessions. ` +
+      "This usually means the DSH session format is not being parsed correctly; the review workspace was not refreshed.",
+    );
+  }
+
   const previous = await tryLoadExisting(options.store);
   const maxSessions = options.ingest?.maxSessions ?? 30;
   const refreshed = createOrRefreshReviewWorkspace(
@@ -49,7 +69,17 @@ export async function refreshLocalDshReviewWorkspace(
     previous,
   );
   const path = await saveReviewWorkspace(refreshed.workspace, options.store);
-  return { ...refreshed, path };
+  return {
+    ...refreshed,
+    path,
+    ingestion: {
+      discoveredSessions: batch.discoveredSessions,
+      sessionsWithAssistantMessages: batch.sessionsWithAssistantMessages,
+      assistantMessages: batch.assistantMessages,
+      sessionsWithMoments: batch.sessionsWithMoments,
+      ingestionWarnings: batch.ingestionWarnings,
+    },
+  };
 }
 
 export function findEvaluationCase(
