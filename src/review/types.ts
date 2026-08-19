@@ -1,4 +1,5 @@
 import type { CalibrationReport, SessionEvaluationCase, SessionHumanReview } from "../evaluation/types.js";
+import type { PresentationLocale } from "../presentation/localization.js";
 
 export interface ReviewWorkspaceSource {
   host: "dsh";
@@ -53,6 +54,8 @@ export interface ReviewIO {
 export interface ReviewSessionOptions {
   /** Persist partial progress after every accepted answer. */
   onCheckpoint?: (review: SessionHumanReview) => void | Promise<void>;
+  /** Reader-facing presentation language. P7 CLI defaults to zh-CN. */
+  locale?: PresentationLocale;
 }
 
 export interface ReviewCalibrationResult {
