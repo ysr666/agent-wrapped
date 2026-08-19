@@ -86,7 +86,10 @@ export function localizeRepeatedPattern(
   const localization = ZH_FAMILY_LOCALIZATION[base];
   if (!localization) return {};
   if (!isEnglishDominant([input.label, ...input.examples])) return {};
-  return localization;
+  return {
+    localizedLabel: localization.label,
+    summary: localization.summary,
+  };
 }
 
 interface PhraseHintRule {
