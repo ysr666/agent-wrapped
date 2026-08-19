@@ -25,6 +25,8 @@ export interface Award {
   /** Original transcript wording. P3.5 never rewrites this text. */
   primaryText: string;
   relatedTexts: string[];
+  /** Structured repeated verbal family retained for presentation/localization. */
+  family?: string;
   count?: number;
   variants?: string[];
   topic?: string;
