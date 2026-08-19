@@ -70,9 +70,18 @@ export function fingerprintEvaluationCase(entry: SessionEvaluationCase): string 
   return createHash("sha256").update(JSON.stringify(stableCasePayload(entry))).digest("hex");
 }
 
-function hasCoreWorkspaceShape(value: unknown): value is LegacyReviewWorkspaceV1 | ReviewWorkspace {
+function hasCoreWorkspaceShape(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<LegacyReviewWorkspaceV1 & ReviewWorkspace>;
+  const candidate = value as {
+    version?: unknown;
+    createdAt?: unknown;
+    updatedAt?: unknown;
+    source?: unknown;
+    cases?: unknown;
+    caseFingerprints?: unknown;
+    reviews?: unknown;
+    completedSessionIds?: unknown;
+  };
   return (
     (candidate.version === 1 || candidate.version === 2) &&
     typeof candidate.createdAt === "string" &&
@@ -89,53 +98,54 @@ function hasCoreWorkspaceShape(value: unknown): value is LegacyReviewWorkspaceV1
 
 function normalizeLoadedWorkspace(value: unknown): ReviewWorkspace | undefined {
   if (!hasCoreWorkspaceShape(value)) return undefined;
+  const candidate = value as LegacyReviewWorkspaceV1 | ReviewWorkspace;
 
-  if (value.version === 1) {
+  if (candidate.version === 1) {
     // P7 protocol v1 did not bind labels to presentation language/version.
     // Preserve the expensive P6 cases, but intentionally discard judgments so
     // old English-only ratings cannot contaminate the new Chinese-aware corpus.
     return {
       version: 2,
-      createdAt: value.createdAt,
-      updatedAt: value.updatedAt,
-      source: value.source,
+      createdAt: candidate.createdAt,
+      updatedAt: candidate.updatedAt,
+      source: candidate.source,
       protocolVersion: CURRENT_REVIEW_PROTOCOL_VERSION,
       presentationLocale: DEFAULT_REVIEW_LOCALE,
-      cases: value.cases,
-      caseFingerprints: value.caseFingerprints,
+      cases: candidate.cases,
+      caseFingerprints: candidate.caseFingerprints,
       reviews: [],
       completedSessionIds: [],
     };
   }
 
-  const locale = value.presentationLocale;
+  const locale = candidate.presentationLocale;
   if (locale !== "zh-CN" && locale !== "en") return undefined;
-  if (typeof value.protocolVersion !== "number") return undefined;
+  if (typeof candidate.protocolVersion !== "number") return undefined;
 
-  if (value.protocolVersion !== CURRENT_REVIEW_PROTOCOL_VERSION) {
+  if (candidate.protocolVersion !== CURRENT_REVIEW_PROTOCOL_VERSION) {
     return {
-      ...value,
+      ...candidate,
       protocolVersion: CURRENT_REVIEW_PROTOCOL_VERSION,
       reviews: [],
       completedSessionIds: [],
     };
   }
 
-  const compatibleReviews = value.reviews.filter(
+  const compatibleReviews = candidate.reviews.filter(
     (review): review is SessionHumanReview =>
       Boolean(
         review &&
           typeof review === "object" &&
-          (review as SessionHumanReview).protocolVersion === value.protocolVersion &&
-          (review as SessionHumanReview).presentationLocale === value.presentationLocale,
+          (review as SessionHumanReview).protocolVersion === candidate.protocolVersion &&
+          (review as SessionHumanReview).presentationLocale === candidate.presentationLocale,
       ),
   );
   const compatibleIds = new Set(compatibleReviews.map((review) => review.sessionId));
 
   return {
-    ...value,
+    ...candidate,
     reviews: compatibleReviews,
-    completedSessionIds: value.completedSessionIds.filter((id) => compatibleIds.has(id)),
+    completedSessionIds: candidate.completedSessionIds.filter((id) => compatibleIds.has(id)),
   };
 }
 
