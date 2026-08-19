@@ -39,8 +39,10 @@ export function presentRepeatedPattern(
   const variants = input.variants?.length ? input.variants : [input.primaryText];
   let label = input.primaryText;
 
-  if (input.family?.startsWith("wait-reset:")) {
-    label = mostCommon(variants.map(waitResetCue).filter((cue): cue is string => Boolean(cue))) ?? label;
+  const waitCues = variants.map(waitResetCue).filter((cue): cue is string => Boolean(cue));
+  const waitCueMajority = waitCues.length >= 2 && waitCues.length / variants.length >= 0.6;
+  if (input.family?.startsWith("wait-reset:") || waitCueMajority) {
+    label = mostCommon(waitCues) ?? label;
   }
 
   const examples = variants
