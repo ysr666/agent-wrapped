@@ -16,7 +16,9 @@ export interface IngestionDiagnostic {
     | "empty-visible-message"
     | "reasoning-skipped"
     | "unknown-model"
-    | "truncated-zstd-tail";
+    | "truncated-zstd-tail"
+    | "assistant-message-shape-unrecognized"
+    | "no-visible-assistant-messages";
   message: string;
   line?: number;
 }
