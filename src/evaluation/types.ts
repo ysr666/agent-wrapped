@@ -7,6 +7,10 @@ export interface EvaluationMomentSnapshot {
   type: MomentType;
   primaryText: string;
   relatedTexts: string[];
+  /** Repeated-pattern metadata retained so review UI can present tics compactly. */
+  family?: string;
+  count?: number;
+  variants?: string[];
   funScore: number;
   confidence: number;
   selected: boolean;

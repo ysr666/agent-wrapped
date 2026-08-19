@@ -1,9 +1,11 @@
 import type {
   AwardPreferenceVote,
+  EvaluationMomentSnapshot,
   PairwisePreferenceVote,
   SessionEvaluationCase,
   SessionHumanReview,
 } from "../evaluation/types.js";
+import { presentRepeatedPattern } from "../presentation/repeatedPattern.js";
 import type { ReviewIO, ReviewSessionOptions, ReviewSessionResult } from "./types.js";
 
 const AWARD_LABELS: Record<string, string> = {
@@ -49,8 +51,22 @@ function upsertPairwiseVote(review: SessionHumanReview, vote: PairwisePreference
   review.pairwiseVotes = votes;
 }
 
-function displayMoment(primaryText: string, relatedTexts: string[]): string {
-  return [primaryText, ...relatedTexts].map((text) => `  “${text}”`).join("\n    ↓\n");
+function displayMoment(moment: EvaluationMomentSnapshot): string {
+  if (moment.type === "repeated_pattern") {
+    const presentation = presentRepeatedPattern(moment);
+    const examples = presentation.examples.filter(
+      (text) => text.trim().toLocaleLowerCase() !== presentation.label.trim().toLocaleLowerCase(),
+    );
+    const lines = [`  “${presentation.label}” × ${presentation.count}`];
+    if (examples.length > 0) {
+      lines.push("  例：", ...examples.map((text) => `    · “${text}”`));
+    }
+    return lines.join("\n");
+  }
+
+  return [moment.primaryText, ...moment.relatedTexts]
+    .map((text) => `  “${text}”`)
+    .join("\n    ↓\n");
 }
 
 async function checkpoint(review: SessionHumanReview, options: ReviewSessionOptions): Promise<void> {
@@ -142,7 +158,7 @@ export async function reviewEvaluationCase(
   for (const moment of selectedMoments) {
     if (!moment.awardId || seenAwardVotes.has(moment.awardId)) continue;
     io.write(`\n${AWARD_LABELS[moment.awardKind ?? ""] ?? moment.awardKind ?? "Award"}`);
-    io.write(displayMoment(moment.primaryText, moment.relatedTexts));
+    io.write(displayMoment(moment));
     const answer = await askAwardVote(io, moment.awardId);
     if (answer.quit) return { review, completed: false, quitRequested: true };
     if (!answer.vote) continue;
@@ -155,9 +171,9 @@ export async function reviewEvaluationCase(
   for (const task of evaluationCase.pairwiseTasks) {
     if (seenPairs.has(task.id)) continue;
     io.write("\nA:");
-    io.write(displayMoment(task.left.primaryText, task.left.relatedTexts));
+    io.write(displayMoment(task.left));
     io.write("\nB:");
-    io.write(displayMoment(task.right.primaryText, task.right.relatedTexts));
+    io.write(displayMoment(task.right));
     const answer = await askPairwiseVote(io, task.id);
     if (answer.quit) return { review, completed: false, quitRequested: true };
     if (!answer.vote) continue;
