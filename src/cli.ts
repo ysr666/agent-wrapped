@@ -115,7 +115,8 @@ DSH options:
   --top-moments N   P6 moments kept per session (default 8)
   --pairs N         pairwise review tasks per session (default 12)
   --reasoning       include reasoning blocks only if the host surface exposed them
-  --locale LOCALE   bind review workspace to zh-CN (default) or en
+  --locale LOCALE   bind a new workspace to zh-CN (default) or en;
+                    existing workspace locale is preserved when omitted
 
 Review options:
   --session ID      review one specific session
@@ -173,7 +174,10 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
   const pairs = numberFlag(args, "pairs", 12);
   const store = stringFlag(args, "store");
   const root = stringFlag(args, "root");
-  const reviewLocale = parseLocale(stringFlag(args, "locale"), DEFAULT_REVIEW_LOCALE);
+  const requestedReviewLocale = stringFlag(args, "locale");
+  const reviewLocale = requestedReviewLocale === undefined
+    ? undefined
+    : parseLocale(requestedReviewLocale, DEFAULT_REVIEW_LOCALE);
   const refreshed = await refreshLocalDshReviewWorkspace({
     store,
     reviewLocale,
