@@ -8,7 +8,7 @@ export const DEFAULT_REVIEW_LOCALE: PresentationLocale = "zh-CN";
 export function isReviewProtocolCompatible(
   review: SessionHumanReview | undefined,
   locale: PresentationLocale,
-): boolean {
+): review is SessionHumanReview {
   return Boolean(
     review &&
       review.protocolVersion === CURRENT_REVIEW_PROTOCOL_VERSION &&
