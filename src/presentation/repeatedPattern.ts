@@ -1,3 +1,8 @@
+import {
+  localizeRepeatedPattern,
+  type PresentationLocale,
+} from "./localization.js";
+
 export interface RepeatedPatternPresentationInput {
   primaryText: string;
   variants?: string[];
@@ -6,9 +11,14 @@ export interface RepeatedPatternPresentationInput {
 }
 
 export interface RepeatedPatternPresentation {
+  /** Compact source-language label, for example `Wait`. */
   label: string;
   count: number;
   examples: string[];
+  /** Optional reader-language label; source wording remains available in `label`. */
+  localizedLabel?: string;
+  /** Optional reader-language explanation, explicitly not a verbatim translation. */
+  localizedSummary?: string;
 }
 
 function mostCommon<T>(values: T[]): T | undefined {
@@ -35,6 +45,7 @@ function waitResetCue(text: string): string | undefined {
 export function presentRepeatedPattern(
   input: RepeatedPatternPresentationInput,
   maxExamples = 3,
+  locale: PresentationLocale = "en",
 ): RepeatedPatternPresentation {
   const variants = input.variants?.length ? input.variants : [input.primaryText];
   let label = input.primaryText;
@@ -48,10 +59,20 @@ export function presentRepeatedPattern(
   const examples = variants
     .filter((text, index, all) => text.trim() && all.indexOf(text) === index)
     .slice(0, Math.max(0, maxExamples));
+  const localization = localizeRepeatedPattern(
+    {
+      label,
+      family: input.family,
+      examples,
+    },
+    locale,
+  );
 
   return {
     label,
     count: input.count ?? variants.length,
     examples,
+    localizedLabel: localization.localizedLabel,
+    localizedSummary: localization.summary,
   };
 }

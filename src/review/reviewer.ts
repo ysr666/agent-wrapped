@@ -5,6 +5,10 @@ import type {
   SessionEvaluationCase,
   SessionHumanReview,
 } from "../evaluation/types.js";
+import {
+  localizeAgentPhrase,
+  type PresentationLocale,
+} from "../presentation/localization.js";
 import { presentRepeatedPattern } from "../presentation/repeatedPattern.js";
 import type { ReviewIO, ReviewSessionOptions, ReviewSessionResult } from "./types.js";
 
@@ -51,21 +55,37 @@ function upsertPairwiseVote(review: SessionHumanReview, vote: PairwisePreference
   review.pairwiseVotes = votes;
 }
 
-function displayMoment(moment: EvaluationMomentSnapshot): string {
+function displaySourceLine(text: string, locale: PresentationLocale): string {
+  const hint = localizeAgentPhrase(text, locale);
+  return hint
+    ? `  “${text}”\n    ↳ 中文提示：${hint}`
+    : `  “${text}”`;
+}
+
+function displayMoment(moment: EvaluationMomentSnapshot, locale: PresentationLocale): string {
   if (moment.type === "repeated_pattern") {
-    const presentation = presentRepeatedPattern(moment);
+    const presentation = presentRepeatedPattern(moment, 3, locale);
     const examples = presentation.examples.filter(
       (text) => text.trim().toLocaleLowerCase() !== presentation.label.trim().toLocaleLowerCase(),
     );
-    const lines = [`  “${presentation.label}” × ${presentation.count}`];
+    const lines = presentation.localizedLabel
+      ? [
+          `  中文口癖：${presentation.localizedLabel} × ${presentation.count}`,
+          ...(presentation.localizedSummary ? [`  ${presentation.localizedSummary}`] : []),
+          `  原文关键词：“${presentation.label}”`,
+        ]
+      : [`  “${presentation.label}” × ${presentation.count}`];
     if (examples.length > 0) {
-      lines.push("  例：", ...examples.map((text) => `    · “${text}”`));
+      lines.push(
+        presentation.localizedLabel ? "  原文例：" : "  例：",
+        ...examples.map((text) => `    · “${text}”`),
+      );
     }
     return lines.join("\n");
   }
 
   return [moment.primaryText, ...moment.relatedTexts]
-    .map((text) => `  “${text}”`)
+    .map((text) => displaySourceLine(text, locale))
     .join("\n    ↓\n");
 }
 
@@ -142,6 +162,8 @@ async function collectMissedMoments(
 /**
  * Review one P6 evaluation case without exposing machine ranking scores during
  * human choices. Existing answers are skipped, which makes the flow resumable.
+ * Chinese review is the default; common English agent-speak gets a local
+ * semantic hint while source wording remains visible as evidence.
  */
 export async function reviewEvaluationCase(
   evaluationCase: SessionEvaluationCase,
@@ -150,6 +172,7 @@ export async function reviewEvaluationCase(
   options: ReviewSessionOptions = {},
 ): Promise<ReviewSessionResult> {
   const review = cloneReview(existing, evaluationCase.sessionId);
+  const locale = options.locale ?? "zh-CN";
   io.write(`\n=== ${evaluationCase.title ?? evaluationCase.sessionId} ===`);
   if (evaluationCase.model) io.write(`模型: ${evaluationCase.model}`);
 
@@ -158,7 +181,7 @@ export async function reviewEvaluationCase(
   for (const moment of selectedMoments) {
     if (!moment.awardId || seenAwardVotes.has(moment.awardId)) continue;
     io.write(`\n${AWARD_LABELS[moment.awardKind ?? ""] ?? moment.awardKind ?? "Award"}`);
-    io.write(displayMoment(moment));
+    io.write(displayMoment(moment, locale));
     const answer = await askAwardVote(io, moment.awardId);
     if (answer.quit) return { review, completed: false, quitRequested: true };
     if (!answer.vote) continue;
@@ -171,9 +194,9 @@ export async function reviewEvaluationCase(
   for (const task of evaluationCase.pairwiseTasks) {
     if (seenPairs.has(task.id)) continue;
     io.write("\nA:");
-    io.write(displayMoment(task.left));
+    io.write(displayMoment(task.left, locale));
     io.write("\nB:");
-    io.write(displayMoment(task.right));
+    io.write(displayMoment(task.right, locale));
     const answer = await askPairwiseVote(io, task.id);
     if (answer.quit) return { review, completed: false, quitRequested: true };
     if (!answer.vote) continue;

@@ -20,6 +20,8 @@ export * from "./moments/momentBuilder.js";
 export * from "./moments/momentRanker.js";
 export * from "./awards/types.js";
 export * from "./awards/awardComposer.js";
+export * from "./presentation/localization.js";
+export * from "./presentation/repeatedPattern.js";
 export * from "./wrapped/types.js";
 export * from "./wrapped/wrappedReport.js";
 export * from "./wrapped/renderer.js";

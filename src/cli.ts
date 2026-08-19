@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { PresentationLocale } from "./presentation/localization.js";
 import { reviewEvaluationCase } from "./review/reviewer.js";
 import {
   calibrateReviewWorkspace,
@@ -83,6 +84,12 @@ function numberFlag(args: ParsedArgs, name: string, fallback: number): number {
   return numeric;
 }
 
+function localeFlag(args: ParsedArgs): PresentationLocale {
+  const value = stringFlag(args, "locale") ?? "zh-CN";
+  if (value === "zh-CN" || value === "en") return value;
+  throw new Error("--locale must be zh-CN or en.");
+}
+
 function out(target: CliTextOutput, text = ""): void {
   target.write(`${text}\n`);
 }
@@ -92,7 +99,7 @@ function helpText(): string {
 
 Usage:
   agent-wrapped dsh [--latest 30] [--root PATH] [--store PATH]
-  agent-wrapped review [--store PATH] [--session ID] [--all]
+  agent-wrapped review [--store PATH] [--session ID] [--all] [--locale zh-CN|en]
   agent-wrapped calibration [--store PATH] [--json]
   agent-wrapped status [--store PATH] [--json]
 
@@ -111,6 +118,9 @@ DSH options:
 Review options:
   --session ID      review one specific session
   --all             continue through all incomplete sessions
+  --locale LOCALE   reader presentation: zh-CN (default) or en
+                    zh-CN adds local semantic hints for common English agent-speak
+                    while preserving the original quote as evidence
 
 Storage:
   --store PATH      review-workspace.json path
@@ -242,6 +252,7 @@ async function commandReview(
   injectedIO?: ReviewIO,
 ): Promise<number> {
   const store = stringFlag(args, "store");
+  const locale = localeFlag(args);
   const workspace = await loadReviewWorkspace(store);
   const requestedSessionId = stringFlag(args, "session") ?? args.positional[0];
   const reviewAll = booleanFlag(args, "all");
@@ -262,6 +273,7 @@ async function commandReview(
     for (;;) {
       const existing = findSessionReview(workspace, current.sessionId);
       const result = await reviewEvaluationCase(current, existing, io, {
+        locale,
         onCheckpoint: async (review) => {
           await saveReviewCheckpoint(workspace, review, { store });
         },
