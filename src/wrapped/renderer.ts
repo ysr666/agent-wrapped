@@ -1,4 +1,5 @@
 import type { Award } from "../awards/types.js";
+import { presentRepeatedPattern } from "../presentation/repeatedPattern.js";
 import type { WrappedRenderOptions, WrappedReport } from "./types.js";
 
 function quoteMarkdown(text: string): string {
@@ -22,21 +23,51 @@ function chronologicalTexts(award: Award): string[] {
   return [award.primaryText, ...award.relatedTexts];
 }
 
+function repeatedMarkdownBody(award: Award): string {
+  const presentation = presentRepeatedPattern({
+    primaryText: award.primaryText,
+    variants: award.variants,
+    count: award.count,
+  });
+  const examples = presentation.examples.filter(
+    (text) => text.trim().toLocaleLowerCase() !== presentation.label.trim().toLocaleLowerCase(),
+  );
+  const lines = [`> “${presentation.label}” × ${presentation.count}`];
+  if (examples.length > 0) {
+    lines.push(">", "> 例如：", ...examples.map((text) => `> - “${text}”`));
+  }
+  return lines.join("\n");
+}
+
+function repeatedPlainBody(award: Award): string {
+  const presentation = presentRepeatedPattern({
+    primaryText: award.primaryText,
+    variants: award.variants,
+    count: award.count,
+  });
+  const examples = presentation.examples.filter(
+    (text) => text.trim().toLocaleLowerCase() !== presentation.label.trim().toLocaleLowerCase(),
+  );
+  const lines = [`“${presentation.label}” × ${presentation.count}`];
+  if (examples.length > 0) {
+    lines.push("例：", ...examples.map((text) => `  · “${text}”`));
+  }
+  return lines.join("\n");
+}
+
 function markdownAwardBody(award: Award): string {
+  if (award.sourceType === "repeated_pattern") return repeatedMarkdownBody(award);
+
   const texts = chronologicalTexts(award);
   if (texts.length === 0) return "";
-
-  const quoted = texts.map((text) => quoteMarkdown(text));
-  const body = quoted.join("\n>\n> →\n>\n");
-  const count = award.count && award.count > 1 ? `\n\n**× ${award.count}**` : "";
-  return `${body}${count}`;
+  return texts.map((text) => quoteMarkdown(text)).join("\n>\n> →\n>\n");
 }
 
 function plainAwardBody(award: Award): string {
+  if (award.sourceType === "repeated_pattern") return repeatedPlainBody(award);
+
   const texts = chronologicalTexts(award);
-  const body = texts.map((text) => `“${text}”`).join("\n  →\n");
-  const count = award.count && award.count > 1 ? ` × ${award.count}` : "";
-  return `${body}${count}`;
+  return texts.map((text) => `“${text}”`).join("\n  →\n");
 }
 
 function scoreLine(report: WrappedReport, award: Award): string {
