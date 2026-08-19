@@ -16,6 +16,14 @@ interface JsonObject {
   [key: string]: unknown;
 }
 
+interface AssistantMessageView {
+  content: unknown;
+  provider?: string;
+  model?: string;
+  messageId?: string;
+  shape: "current" | "legacy";
+}
+
 function object(value: unknown): JsonObject | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
@@ -56,6 +64,42 @@ function eventSeq(record: JsonObject, fallback: number): string {
   return typeof seq === "number" && Number.isFinite(seq) ? String(seq) : String(fallback);
 }
 
+/**
+ * Current DSH stores `assistant/message` as:
+ * `{ turn, step, message: { id, role, content, source }, usage? }`.
+ *
+ * Early Agent Wrapped fixtures modeled a pre-current/legacy shape where
+ * `content` and `provenance` lived directly under `data`. Keep that fallback so
+ * previously exported fixtures remain ingestible while treating the official
+ * current envelope as canonical.
+ */
+function assistantMessageView(data: JsonObject): AssistantMessageView | undefined {
+  const message = object(data.message);
+  if (message) {
+    const source = object(message.source);
+    const provenance = object(message.provenance);
+    return {
+      content: message.content,
+      provider: string(source?.provider) ?? string(provenance?.provider),
+      model: string(source?.model) ?? string(provenance?.model),
+      messageId: string(message.id),
+      shape: "current",
+    };
+  }
+
+  if (Array.isArray(data.content)) {
+    const provenance = object(data.provenance);
+    return {
+      content: data.content,
+      provider: string(provenance?.provider),
+      model: string(provenance?.model),
+      shape: "legacy",
+    };
+  }
+
+  return undefined;
+}
+
 function appendUserMessage(
   messages: TranscriptMessage[],
   record: JsonObject,
@@ -75,7 +119,9 @@ function appendUserMessage(
     metadata: {
       dshEventType: "user/message",
       dshSeq: record.seq,
-      surfaceOp: data.surfaceOp,
+      dshMessageId: string(data.id),
+      surfaceOp: record.surfaceOp ?? data.surfaceOp,
+      sourceKind: string(object(data.source)?.kind),
     },
   });
 }
@@ -87,10 +133,21 @@ function appendAssistantMessage(
   data: JsonObject,
   lineIndex: number,
   includeVisibleReasoning: boolean,
-): void {
+): { provider?: string; model?: string } {
+  const view = assistantMessageView(data);
+  if (!view) {
+    diagnostics.push({
+      level: "warning",
+      code: "assistant-message-shape-unrecognized",
+      message: "Skipped an assistant/message event whose message envelope was not recognized.",
+      line: lineIndex + 1,
+    });
+    return {};
+  }
+
   const allowed = new Set(["text", ...(includeVisibleReasoning ? ["reasoning"] : [])]);
-  const blocks = textBlocks(data.content, allowed);
-  const allBlocks = contentBlocks(data.content);
+  const blocks = textBlocks(view.content, allowed);
+  const allBlocks = contentBlocks(view.content);
   const skippedReasoning = !includeVisibleReasoning && allBlocks.some((block) => block.type === "reasoning");
   if (skippedReasoning) {
     diagnostics.push({
@@ -108,14 +165,10 @@ function appendAssistantMessage(
       message: "Assistant event contained no visible text blocks after ingestion policy was applied.",
       line: lineIndex + 1,
     });
-    return;
+    return { provider: view.provider, model: view.model };
   }
 
-  const provenance = object(data.provenance);
-  const provider = string(provenance?.provider);
-  const model = string(provenance?.model);
   const seq = eventSeq(record, lineIndex);
-
   for (const block of blocks) {
     const text = block.text.trim();
     if (!text) continue;
@@ -128,15 +181,20 @@ function appendAssistantMessage(
       metadata: {
         dshEventType: "assistant/message",
         dshSeq: record.seq,
+        dshMessageId: view.messageId,
         turn: data.turn,
         step: data.step,
         contentType: block.type,
         visibleReasoning: block.type === "reasoning",
-        provider,
-        model,
+        provider: view.provider,
+        model: view.model,
+        dshMessageShape: view.shape,
+        surfaceOp: record.surfaceOp,
       },
     });
   }
+
+  return { provider: view.provider, model: view.model };
 }
 
 /**
@@ -196,10 +254,7 @@ export function parseDshSessionJsonl(
     }
 
     if (type === "assistant/message") {
-      const provenance = object(data.provenance);
-      provider = string(provenance?.provider) ?? provider;
-      model = string(provenance?.model) ?? model;
-      appendAssistantMessage(
+      const extracted = appendAssistantMessage(
         messages,
         diagnostics,
         record,
@@ -207,6 +262,8 @@ export function parseDshSessionJsonl(
         lineIndex,
         options.includeVisibleReasoning ?? false,
       );
+      provider = extracted.provider ?? provider;
+      model = extracted.model ?? model;
     }
   }
 
@@ -219,6 +276,14 @@ export function parseDshSessionJsonl(
 
   const createdAt = eventTimestamp(header.createdAt);
   const cwd = string(header.cwd);
+  const assistantMessages = messages.filter((message) => message.role === "assistant").length;
+  if (assistantMessages === 0) {
+    diagnostics.push({
+      level: "warning",
+      code: "no-visible-assistant-messages",
+      message: "No visible assistant text was recovered from this DSH session artifact.",
+    });
+  }
   if (!model) {
     diagnostics.push({
       level: "info",
