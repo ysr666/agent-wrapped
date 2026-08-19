@@ -1,6 +1,7 @@
 import { buildCalibrationReport } from "../evaluation/benchmark.js";
 import { prepareLocalDshEvaluation, type PrepareLocalDshEvaluationOptions } from "../evaluation/localDsh.js";
 import type { SessionEvaluationCase, SessionHumanReview } from "../evaluation/types.js";
+import type { PresentationLocale } from "../presentation/localization.js";
 import type { ReviewCalibrationResult, ReviewWorkspace, ReviewWorkspaceRefreshResult } from "./types.js";
 import {
   computeReviewProgress,
@@ -13,6 +14,8 @@ import {
 
 export interface RefreshLocalDshReviewOptions extends PrepareLocalDshEvaluationOptions {
   store?: string;
+  /** Reader language bound to the resulting human-review workspace. */
+  reviewLocale?: PresentationLocale;
 }
 
 export interface SaveReviewCheckpointOptions {
@@ -67,6 +70,7 @@ export async function refreshLocalDshReviewWorkspace(
       maxSessions,
     },
     previous,
+    { presentationLocale: options.reviewLocale },
   );
   const path = await saveReviewWorkspace(refreshed.workspace, options.store);
   return {
@@ -93,11 +97,27 @@ export function findSessionReview(
   workspace: ReviewWorkspace,
   sessionId: string,
 ): SessionHumanReview | undefined {
-  return workspace.reviews.find((entry) => entry.sessionId === sessionId);
+  return workspace.reviews.find(
+    (entry) =>
+      entry.sessionId === sessionId &&
+      entry.protocolVersion === workspace.protocolVersion &&
+      entry.presentationLocale === workspace.presentationLocale,
+  );
 }
 
 export function nextIncompleteCase(workspace: ReviewWorkspace): SessionEvaluationCase | undefined {
-  const complete = new Set(workspace.completedSessionIds);
+  const compatibleReviewIds = new Set(
+    workspace.reviews
+      .filter(
+        (review) =>
+          review.protocolVersion === workspace.protocolVersion &&
+          review.presentationLocale === workspace.presentationLocale,
+      )
+      .map((review) => review.sessionId),
+  );
+  const complete = new Set(
+    workspace.completedSessionIds.filter((sessionId) => compatibleReviewIds.has(sessionId)),
+  );
   return workspace.cases.find((entry) => !complete.has(entry.sessionId));
 }
 
@@ -113,8 +133,13 @@ export async function saveReviewCheckpoint(
 }
 
 export function calibrateReviewWorkspace(workspace: ReviewWorkspace): ReviewCalibrationResult {
+  const compatibleReviews = workspace.reviews.filter(
+    (review) =>
+      review.protocolVersion === workspace.protocolVersion &&
+      review.presentationLocale === workspace.presentationLocale,
+  );
   return {
-    report: buildCalibrationReport(workspace.cases, workspace.reviews),
+    report: buildCalibrationReport(workspace.cases, compatibleReviews),
     progress: computeReviewProgress(workspace),
   };
 }

@@ -1,5 +1,7 @@
 export type PresentationLocale = "zh-CN" | "en";
 
+export type LocalizationCoverage = "native" | "localized" | "partial" | "uncovered";
+
 export interface RepeatedPatternLocalizationInput {
   label: string;
   family?: string;
@@ -9,6 +11,21 @@ export interface RepeatedPatternLocalizationInput {
 export interface RepeatedPatternLocalization {
   localizedLabel?: string;
   summary?: string;
+}
+
+export interface LocalizedTextLine {
+  text: string;
+  englishDominant: boolean;
+  hint?: string;
+}
+
+export interface TextLocalizationAssessment {
+  coverage: LocalizationCoverage;
+  lines: LocalizedTextLine[];
+  reviewSafe: boolean;
+  englishLines: number;
+  localizedEnglishLines: number;
+  uncoveredEnglishLines: number;
 }
 
 interface FamilyLocalization {
@@ -103,7 +120,7 @@ const ZH_AGENT_PHRASE_HINTS: PhraseHintRule[] = [
     hint: "等等，我再确认一下。",
   },
   {
-    patterns: [/\b(?:i was wrong|we were wrong|my mistake|take that back|scratch that)\b/iu],
+    patterns: [/\b(?:i was wrong|we were wrong|my mistake|take that back|scratch that|i stand corrected)\b/iu],
     hint: "我刚才的判断错了 / 要收回前面的说法。",
   },
   {
@@ -144,6 +161,14 @@ const ZH_AGENT_PHRASE_HINTS: PhraseHintRule[] = [
     patterns: [/\b(?:next update|i(?:'ll| will) finish|i(?:'ll| will) fix|finishing this now|not looping again)\b/iu],
     hint: "下一步我就完成 / 修掉，不再继续绕。",
   },
+  {
+    patterns: [/\b(?:definitely|certainly|clearly|absolutely).{0,26}\b(?:not|isn't|is not).{0,24}\b(?:issue|problem|cause|bug)\b/iu],
+    hint: "这里在很确定地排除一个原因。",
+  },
+  {
+    patterns: [/\b(?:actually|instead|turns out|in fact).{0,40}\b(?:issue|problem|cause|bug|causing|responsible)\b/iu],
+    hint: "这里在改口，指出真正的问题来源。",
+  },
 ];
 
 /**
@@ -161,4 +186,74 @@ export function localizeAgentPhrase(
     if (rule.patterns.some((pattern) => pattern.test(text))) return rule.hint;
   }
   return undefined;
+}
+
+/**
+ * Moment-level language coverage assessment used by P7. A Chinese review is
+ * considered safe only when every English-dominant source line has a local
+ * semantic cue. Unknown English is explicitly surfaced instead of silently
+ * turning language friction into a negative entertainment label.
+ */
+export function assessTextLocalization(
+  texts: string[],
+  locale: PresentationLocale,
+): TextLocalizationAssessment {
+  const lines = texts.map((text) => {
+    const englishDominant = locale === "zh-CN" && isEnglishDominant([text]);
+    return {
+      text,
+      englishDominant,
+      hint: englishDominant ? localizeAgentPhrase(text, locale) : undefined,
+    };
+  });
+
+  if (locale !== "zh-CN") {
+    return {
+      coverage: "native",
+      lines,
+      reviewSafe: true,
+      englishLines: 0,
+      localizedEnglishLines: 0,
+      uncoveredEnglishLines: 0,
+    };
+  }
+
+  const englishLines = lines.filter((line) => line.englishDominant).length;
+  const localizedEnglishLines = lines.filter((line) => line.englishDominant && line.hint).length;
+  const uncoveredEnglishLines = englishLines - localizedEnglishLines;
+  let coverage: LocalizationCoverage;
+  if (englishLines === 0) coverage = "native";
+  else if (uncoveredEnglishLines === 0) coverage = "localized";
+  else if (localizedEnglishLines > 0) coverage = "partial";
+  else coverage = "uncovered";
+
+  return {
+    coverage,
+    lines,
+    reviewSafe: uncoveredEnglishLines === 0,
+    englishLines,
+    localizedEnglishLines,
+    uncoveredEnglishLines,
+  };
+}
+
+/** Structural context is safe to localize because it describes the Moment type,
+ * not the transcript wording itself. */
+export function localizeMomentStructure(
+  type: string,
+  locale: PresentationLocale,
+): string | undefined {
+  if (locale !== "zh-CN") return undefined;
+  switch (type) {
+    case "boomerang":
+      return "结构提示：这是前后判断互相打脸的一组。";
+    case "false_dawn":
+      return "结构提示：前面刚宣布好消息 / 搞定，后面又被推翻。";
+    case "plot_twist":
+      return "结构提示：这里发生了明显的方向反转。";
+    case "correction_arc":
+      return "结构提示：这是“原判断 → 改口 → 新判断”的三段式反转。";
+    default:
+      return undefined;
+  }
 }

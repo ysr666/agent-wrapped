@@ -64,9 +64,6 @@ function snapshotMoments(
     retained.set(moment.id, toSnapshot(moment, selected));
   }
 
-  // P3.5 intentionally protects core award families, so a selected quote,
-  // catchphrase, or boomerang may sit below the raw P3 top-N. P6 must still
-  // retain every displayed card or human keep/drop votes would silently vanish.
   for (const moment of ranked) {
     if (!selected.has(moment.id) || retained.has(moment.id)) continue;
     retained.set(moment.id, toSnapshot(moment, selected));
@@ -108,13 +105,10 @@ function buildPairwiseTasks(
     });
   };
 
-  // Adjacent ranked candidates expose local ordering mistakes efficiently.
   for (let index = 0; index + 1 < moments.length && output.length < maxTasks; index += 1) {
     add(moments[index], moments[index + 1]);
   }
 
-  // Compare selected cards against the strongest rejected candidates. This
-  // directly tests P3.5 selection quality rather than only P3 ordering.
   const selected = moments.filter((moment) => moment.selected);
   const rejected = moments.filter((moment) => !moment.selected);
   for (const chosen of selected) {
@@ -128,7 +122,6 @@ function buildPairwiseTasks(
   return output;
 }
 
-/** Build one privacy-conscious, deterministic real-session evaluation case. */
 export function buildSessionEvaluationCase(
   session: IngestedSession,
   options: BuildEvaluationCaseOptions = {},
@@ -153,7 +146,6 @@ export function buildSessionEvaluationCase(
   };
 }
 
-/** Batch P6 case generation. No transcript bytes are copied into the dataset beyond moment candidates. */
 export function buildEvaluationDataset(
   sessions: IngestedSession[],
   options: BuildEvaluationCaseOptions = {},
@@ -180,6 +172,7 @@ export function summarizePairwisePreferences(
   let decisive = 0;
   let ties = 0;
   let skipped = 0;
+  let languageCoverageSkipped = 0;
   let correct = 0;
 
   for (const vote of latest.values()) {
@@ -187,6 +180,7 @@ export function summarizePairwisePreferences(
     if (!task) continue;
     if (vote.winner === "skip") {
       skipped += 1;
+      if (vote.reason === "language-coverage") languageCoverageSkipped += 1;
       continue;
     }
     if (vote.winner === "tie") {
@@ -203,6 +197,7 @@ export function summarizePairwisePreferences(
     decisive,
     ties,
     skipped,
+    languageCoverageSkipped,
     correct,
     accuracy: decisive === 0 ? 0 : Number((correct / decisive).toFixed(4)),
     unknownTaskIds: [...unknown].sort(),
@@ -211,6 +206,8 @@ export function summarizePairwisePreferences(
 
 interface KindAccumulator {
   votes: number;
+  decisive: number;
+  skipped: number;
   kept: number;
   funTotal: number;
   funCount: number;
@@ -221,12 +218,6 @@ function average(values: number[]): number | undefined {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
 }
 
-/**
- * Aggregate human review evidence across real sessions.
- *
- * This report measures whether the current local engine is funny enough before
- * any semantic reranker is introduced. It does not mutate thresholds itself.
- */
 export function buildCalibrationReport(
   dataset: SessionEvaluationCase[],
   reviews: SessionHumanReview[],
@@ -242,6 +233,8 @@ export function buildCalibrationReport(
   const pairwise = summarizePairwisePreferences(allTasks, pairwiseVotes);
 
   let awardVotes = 0;
+  let awardDecisiveVotes = 0;
+  let awardSkipped = 0;
   let kept = 0;
   let missedMoments = 0;
   const funRatings: number[] = [];
@@ -265,18 +258,32 @@ export function buildCalibrationReport(
       const moment = awardsById.get(vote.awardId);
       if (!moment?.awardKind) continue;
       awardVotes += 1;
-      if (vote.verdict === "keep") kept += 1;
-      if (vote.fun !== undefined) funRatings.push(vote.fun);
 
       const accumulator = byKind.get(moment.awardKind) ?? {
         votes: 0,
+        decisive: 0,
+        skipped: 0,
         kept: 0,
         funTotal: 0,
         funCount: 0,
       };
       accumulator.votes += 1;
-      if (vote.verdict === "keep") accumulator.kept += 1;
+
+      if (vote.verdict === "skip") {
+        awardSkipped += 1;
+        accumulator.skipped += 1;
+        byKind.set(moment.awardKind, accumulator);
+        continue;
+      }
+
+      awardDecisiveVotes += 1;
+      accumulator.decisive += 1;
+      if (vote.verdict === "keep") {
+        kept += 1;
+        accumulator.kept += 1;
+      }
       if (vote.fun !== undefined) {
+        funRatings.push(vote.fun);
         accumulator.funTotal += vote.fun;
         accumulator.funCount += 1;
       }
@@ -288,8 +295,10 @@ export function buildCalibrationReport(
     .map(([kind, stats]) => ({
       kind,
       votes: stats.votes,
+      decisive: stats.decisive,
+      skipped: stats.skipped,
       kept: stats.kept,
-      keepRate: stats.votes === 0 ? 0 : Number((stats.kept / stats.votes).toFixed(4)),
+      keepRate: stats.decisive === 0 ? 0 : Number((stats.kept / stats.decisive).toFixed(4)),
       averageFun:
         stats.funCount === 0 ? undefined : Number((stats.funTotal / stats.funCount).toFixed(2)),
     }))
@@ -299,7 +308,10 @@ export function buildCalibrationReport(
     sessionsInDataset: dataset.length,
     sessionsReviewed: latestReviews.size,
     awardVotes,
-    awardKeepRate: awardVotes === 0 ? 0 : Number((kept / awardVotes).toFixed(4)),
+    awardDecisiveVotes,
+    awardSkipped,
+    awardKeepRate:
+      awardDecisiveVotes === 0 ? 0 : Number((kept / awardDecisiveVotes).toFixed(4)),
     averageAwardFun: average(funRatings),
     pairwise,
     missedMoments,

@@ -66,13 +66,15 @@ function scriptedReviewIO(answers) {
   };
 }
 
-test("P7 CLI can review a stored case, report status, and print calibration JSON", async () => {
+test("P7 CLI can review a stored case, report protocol status, and print calibration JSON", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agent-wrapped-cli-"));
   const store = join(directory, "review.json");
   try {
     const workspace = createOrRefreshReviewWorkspace(
       [evaluationCase()],
       { host: "dsh", maxSessions: 1 },
+      undefined,
+      { presentationLocale: "zh-CN" },
     ).workspace;
     await saveReviewWorkspace(workspace, store);
 
@@ -92,6 +94,7 @@ test("P7 CLI can review a stored case, report status, and print calibration JSON
 
     const status = capture();
     assert.equal(await runCli(["status", "--store", store], { stdout: status.output, stderr: stderr.output }), 0);
+    assert.match(status.value(), /评测协议：v2 · zh-CN/u);
     assert.match(status.value(), /1\/1 已完成/u);
 
     const calibration = capture();
@@ -100,9 +103,39 @@ test("P7 CLI can review a stored case, report status, and print calibration JSON
       0,
     );
     const parsed = JSON.parse(calibration.value());
+    assert.equal(parsed.protocolVersion, 2);
+    assert.equal(parsed.presentationLocale, "zh-CN");
     assert.equal(parsed.progress.completedSessions, 1);
     assert.equal(parsed.calibration.awardKeepRate, 1);
+    assert.equal(parsed.calibration.awardSkipped, 0);
     assert.equal(parsed.calibration.pairwise.accuracy, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("P7 CLI refuses to mix review locales inside one workspace", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-wrapped-cli-locale-"));
+  const store = join(directory, "review.json");
+  try {
+    const workspace = createOrRefreshReviewWorkspace(
+      [evaluationCase()],
+      { host: "dsh", maxSessions: 1 },
+      undefined,
+      { presentationLocale: "zh-CN" },
+    ).workspace;
+    await saveReviewWorkspace(workspace, store);
+
+    const stdout = capture();
+    const stderr = capture();
+    const code = await runCli(["review", "--store", store, "--locale", "en"], {
+      stdout: stdout.output,
+      stderr: stderr.output,
+      reviewIO: scriptedReviewIO([]),
+    });
+    assert.equal(code, 1);
+    assert.match(stderr.value(), /workspace is bound to zh-CN/iu);
+    assert.match(stderr.value(), /dsh --latest 1 --locale en/iu);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
