@@ -144,6 +144,7 @@ function toAward(moment: RankedMoment, kind: AwardKind, locale: AwardLocale): Aw
     messageIndexes: [...moment.messageIndexes],
     primaryText: moment.primaryText,
     relatedTexts: [...moment.relatedTexts],
+    family: moment.family,
     count: moment.count,
     variants: moment.variants ? [...moment.variants] : undefined,
     topic: moment.topic,
