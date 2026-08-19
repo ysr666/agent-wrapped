@@ -96,7 +96,8 @@ const SIGNAL_RULES: SignalRule[] = [
       { cue: "wait", regex: /(?:等等|等一下|先等等|先等一下)/u },
       { cue: "weird", regex: /(?:离谱|诡异|奇怪|有意思|没想到|居然|竟然)/u },
       { cue: "good-bad-news", regex: /好消息|坏消息/u },
-      { cue: "english-surprise", regex: /\b(?:wait|hold on|plot twist|this is interesting|surprisingly|unexpectedly|weird)\b/iu },
+      { cue: "english-wait-reset", regex: /\b(?:wait|hold on)(?=\s*(?:[,!:—-]|$))/iu },
+      { cue: "english-surprise", regex: /\b(?:plot twist|this is interesting|surprisingly|unexpectedly|weird)\b/iu },
     ],
   },
   {
@@ -164,7 +165,7 @@ const VERBAL_FAMILY_RULES: VerbalFamilyRule[] = [
     family: "wait-reset",
     patterns: [
       /^(?:等等|等一下|先等等|先等一下)(?:[，,:：—\s-]|$)/u,
-      /^(?:wait|hold on)(?:[,!:—\s-]|$)/iu,
+      /^(?:wait|hold on)(?=\s*(?:[,!:—-]|$))/iu,
     ],
   },
   {
