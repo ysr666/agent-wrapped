@@ -104,7 +104,7 @@ test("Story Miner prompt asks for structure only; narration receives only verifi
   const miner = buildStoryMinerPrompt(evidence);
   assert.match(miner.system, /职责只有一个/u);
   assert.match(miner.system, /不要写标题/u);
-  assert.doesNotMatch(miner.user, /\"score\"\s*:/u);
+  assert.ok(!miner.user.includes('"score":'));
 
   const parsed = parseStoryMinerOutput(minedFailureWorkaround());
   const validation = validateStoryCandidates(parsed.candidates, evidence);
