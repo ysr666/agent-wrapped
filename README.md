@@ -10,13 +10,14 @@ Instead of only counting tokens and tool calls, Agent Wrapped looks for the part
 - 🐺 **Called-it-too-early moments** — repeated declarations that the root cause was found
 - 🧠 **Plot twists** — sudden changes of direction, realizations, and self-corrections
 - 🍾 **Premature celebrations** — victory laps that get overturned a few messages later
+- 🎬 **Story + persona (experimental)** — an optional evidence-bound LLM layer that turns several grounded moments into a session story and “this session played like…” character read
 - 📊 **Session / weekly / monthly Wrapped** — later, compare patterns across sessions and agents
 
 ## Goal
 
 Agent Wrapped is intentionally entertainment-first. It should feel more like an awards show for your AI sessions than another productivity dashboard.
 
-The architecture is **moment-first, award-second**:
+The architecture is **moment-first, award-second**. The semantic layer is optional and sits on top of bounded evidence; it does not replace the local Moment Engine:
 
 ```text
 Local session logs
@@ -41,7 +42,11 @@ Real-session evaluation   ✅ P6
   ↓
 Local review runner       ✅ P7
   ↓
-🎬 Agent Wrapped
+Bounded evidence packet
+  ↓
+Optional semantic narrator 🧪 P8 spike
+  ↓
+🎬 Story + 🎭 session persona
 ```
 
 An award is how a strong moment gets presented; it is not a reason to create another independent language parser.
@@ -57,6 +62,7 @@ An award is how a strong moment gets presented; it is not a reason to create ano
 - ✅ **P5 — Session ingestion**: adds the host-neutral `IngestedSession` boundary and a real DeepSeek Harness adapter for durable `session.jsonl` logs, including local discovery and DSH's default concatenated Zstandard storage.
 - ✅ **P6 — Real-session evaluation / calibration**: turns ingested sessions into bounded human-review cases, generates deterministic pairwise comparisons, records keep/drop/skip + fun ratings + missed moments, and aggregates ranking/award calibration metrics.
 - ✅ **P7 — Local Evaluation Runner**: adds a resumable local CLI/workspace loop for preparing real DSH sessions, reviewing final cards and blind A/B rankings, checkpointing every answer, protecting labels with review-protocol/locale metadata, and printing calibration/status reports.
+- 🧪 **P8 — Semantic story/persona spike**: optional provider-neutral LLM seam. It sends only top Moment evidence plus nearby user/assistant/tool context, validates every returned story/persona claim against evidence ids, and fails closed on invented references. It is off by default and is not part of P7 calibration yet.
 
 ## P7 quick start
 
@@ -103,6 +109,42 @@ Pairwise review remains blind to `funScore`, confidence, predicted winner, and s
 
 See `docs/p7-local-review-runner.md` for the review protocol and storage behavior.
 
+## Experimental P8: story + session persona
+
+The first P8 spike accepts that story/persona inference is a genuinely semantic task. Instead of trying to encode every “破防→冷静→继续干活” or “能力没有→硬换路完成” pattern as regexes, it keeps P0–P7 local and deterministic, then gives an explicitly configured LLM a **bounded evidence packet**.
+
+The packet contains only:
+
+```text
+Top P3 moments
++ nearby user / assistant / tool messages
++ structural evidence already found by the Moment Engine
+```
+
+It does **not** contain the entire DSH transcript. The narrator must cite supplied evidence ids for every story beat and persona dimension; unknown ids make parsing fail. “赛后解说” is explicitly editorial copy and is never treated as a source quote. Persona wording is session-scoped (“本场表现像…”), not a claim that a model has a permanent personality.
+
+No endpoint is assumed. To try the newest DSH session with any OpenAI-compatible endpoint:
+
+```bash
+export AGENT_WRAPPED_LLM_BASE_URL="https://your-endpoint.example/v1"
+export AGENT_WRAPPED_LLM_MODEL="your-model"
+export AGENT_WRAPPED_LLM_API_KEY="..."   # optional for local endpoints
+
+npm run story:latest
+```
+
+Optional knobs:
+
+```bash
+export AGENT_WRAPPED_LOCALE=zh-CN
+export AGENT_WRAPPED_TOP_MOMENTS=8
+export AGENT_WRAPPED_LLM_JSON_MODE=1
+# Only when the host actually exposed reasoning to the user:
+export AGENT_WRAPPED_INCLUDE_REASONING=1
+```
+
+`story:latest` prints the endpoint/model and the number of moments/context messages before sending the request. P8 is an experiment: its output should be reviewed against the original evidence before it becomes a default Wrapped surface.
+
 ## Public APIs
 
 For analysis-only use:
@@ -144,6 +186,15 @@ const refreshed = await refreshLocalDshReviewWorkspace({
 const calibration = calibrateReviewWorkspace(refreshed.workspace);
 ```
 
+For the P8 semantic spike:
+
+```ts
+const evidence = buildSemanticEvidence(session, { topMoments: 8, contextRadius: 1 });
+const { narrator } = createOpenAICompatibleNarratorFromEnv();
+const raw = await narrator.generate(buildStoryPersonaPrompt(evidence));
+const semantic = parseSemanticStoryPersona(raw, evidence);
+```
+
 Existing QuoteScorer, CatchphraseClusterer, BoomerangDetector, FacetScorer, and SessionAnalyzer APIs remain as compatibility surfaces while new work uses the Moment Engine pipeline.
 
 See `docs/moment-engine-architecture.md` for architecture and phase boundaries.
@@ -159,16 +210,17 @@ The ingestion boundary is host-neutral; adding another adapter must end in the s
 
 ## Design principles
 
-1. **Local-first by default.** P0–P7 work without another LLM call.
+1. **Local-first by default.** P0–P7 work without another LLM call. P8 is explicit opt-in and has no default network endpoint.
 2. **Use only exposed transcript data.** Agent Wrapped analyzes visible messages made available by the host. It does not attempt to recover hidden chain-of-thought.
-3. **Original wording matters.** Award/report layers preserve the agent’s source wording instead of regenerating “funnier” quotes.
+3. **Original wording matters.** Award/report layers preserve the agent’s source wording instead of regenerating “funnier” quotes; semantic commentary is labeled as commentary.
 4. **Fun before analytics.** Token charts are optional; the memorable moments are the product.
 5. **Cross-agent core.** Core event, relation, moment, award, and evaluation definitions stay independent from any single model/runtime.
 6. **Fun score and confidence are different.** A moment can be hilarious while still requiring semantic verification before it is shown as fact.
 7. **No award-specific parser sprawl.** New ideas should first be modeled as an Event, Relation, or Moment composition before adding presentation logic.
 8. **Do not force a Wrapped.** If nothing clears the quality threshold, the report can legitimately contain zero awards.
-9. **Calibrate on people, not synthetic regex wins.** P6/P7 measure pairwise human preference, award keep-rate, and missed moments before a semantic reranker is justified.
+9. **Calibrate on people, not synthetic regex wins.** P6/P7 measure pairwise human preference, award keep-rate, and missed moments before semantic behavior is promoted to the default product.
 10. **Human labels must match both candidates and presentation.** P7 fingerprints evaluation cases and binds reviews to a protocol version + locale; stale or language-incompatible judgments are invalidated or skipped.
+11. **LLMs may interpret, not fabricate.** P8 output must cite bounded evidence ids, and unknown evidence references fail closed.
 
 ## Development
 
@@ -192,11 +244,12 @@ npm run test:evaluation
 npm run test:review
 npm run test:p5-p6
 npm run test:p7
+npm run test:p8
 ```
 
 ## Status
 
-🚧 Early prototype. P0–P7 are implemented. The next work should be collecting a first real reviewed DSH corpus with the P7 v2 protocol, inspecting the failure distribution, and using that evidence to decide whether the next engineering step is local calibration, another host adapter, or an optional semantic reranker.
+🚧 Early prototype. P0–P7 are implemented and P8 is an opt-in semantic experiment. The next evidence we need is side-by-side review of P7 moments versus P8 story/persona output on real DSH sessions: does the semantic layer recover the “剧情+人格” users actually enjoy, and does its added value justify the privacy/cost/latency tradeoff?
 
 ## License
 
