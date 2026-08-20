@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { parseDshSessionJsonl } from "../dist/ingest/dsh.js";
+import { buildSemanticEvidenceFromMoments } from "../dist/index.js";
 
 function artifact() {
   return [
@@ -102,4 +103,37 @@ test("P5 exposes DSH tool calls/results/outcomes as observable SessionEvents", (
   assert.equal(workaround.kind, "tool_call");
   assert.ok(session.messages.some((message) => message.role === "tool" && message.text === "permission denied"));
   assert.ok(session.messages.some((message) => message.role === "tool" && message.text === "deleted"));
+});
+
+test("DSH non-error command failures remain local failure summaries, not remote success text", () => {
+  const lines = [
+    JSON.stringify({ type: "session", version: 0, id: "soft-failure", createdAt: 1784973850091 }),
+    JSON.stringify({ type: "tool/call", seq: 1, data: { turn: 1, step: 1, callId: "call-1", name: "exec", arguments: "npm test" } }),
+    JSON.stringify({
+      type: "tool/result",
+      seq: 2,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: "tool-message-1",
+          role: "user",
+          content: [{ type: "tool-result", toolCallId: "call-1", isError: false, content: [{ type: "text", text: "exit code 1; tests failed" }] }],
+          source: { kind: "tool", callId: "call-1" },
+        },
+      },
+    }),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(lines);
+  const rawResult = session.events.find((event) => event.kind === "tool_result");
+  assert.equal(rawResult?.isError, false);
+  assert.equal(rawResult?.callId, "call-1");
+
+  const evidence = buildSemanticEvidenceFromMoments(session, [], { coverageWindows: 1, maxEvents: 10 });
+  const remoteResult = evidence.events.find((event) => event.kind === "tool_result");
+  assert.equal(remoteResult?.outcome, "failure");
+  assert.equal(remoteResult?.exitCode, 1);
+  assert.equal(remoteResult?.text, undefined);
+  assert.ok(!JSON.stringify(evidence).includes("tests failed"));
 });

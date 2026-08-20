@@ -158,6 +158,10 @@ function certaintyCue(text: string | undefined): boolean {
   return !!text && /(?:修好了|解决了|找到(?:了)?根因|问题.*(?:明确|清楚)|可以结束|没问题了|搞定|完成了|fixed|solved|root cause|done|all good|resolved)/iu.test(text);
 }
 
+function claimCue(text: string | undefined): boolean {
+  return certaintyCue(text) || !!text && /(?:应该(?:是|已经)|确认(?:了)?|结论(?:是|为)|根因(?:是|在)|就是|并非|确实|显然|i think|the issue is|this is|confirmed)/iu.test(text);
+}
+
 function capabilityGapCue(text: string | undefined): boolean {
   return !!text && /(?:不能|无法|做不到|没有(?:这个|相应)?(?:工具|能力|权限)|不支持|can't|cannot|unable to|don't have (?:a |the )?(?:tool|ability|permission)|not supported)/iu.test(text);
 }
@@ -166,24 +170,25 @@ function breakdownCue(text: string | undefined): boolean {
   return !!text && /(?:老子不玩了|我真服了|服了|受不了了|崩溃|烦死|不干了|放弃|fuck(?: this)?|damn|i'?m done|give up|can't take this|this is ridiculous)/iu.test(text);
 }
 
-function successCue(text: string | undefined): boolean {
-  return !!text && /(?:成功|通过了|好了|已删除|完成|passed|success|succeeded|deleted|works now|fixed now)/iu.test(text);
+function hasToolOutcome(event: EvidenceEvent, outcomes: string[]): boolean {
+  return (event.kind === "tool_result" || event.kind === "tool_error") && !!event.outcome && outcomes.includes(event.outcome);
 }
 
 function beatCompatible(kind: StoryBeatKind, evidence: EvidenceEvent[]): boolean {
   if (kind === "setup") return evidence.some((event) => event.kind === "assistant_text" || event.kind === "user_message");
-  if (kind === "claim") return evidence.some((event) => event.kind === "assistant_text");
+  if (kind === "claim") return evidence.some((event) => event.kind === "assistant_text" && claimCue(eventText(event)));
   if (kind === "attempt" || kind === "workaround") return evidence.some((event) => event.kind === "tool_call");
   if (kind === "failure") {
     return evidence.some((event) =>
-      event.kind === "tool_error" ||
+      hasToolOutcome(event, ["failure", "blocked"]) ||
       (event.kind === "turn_end" && event.isError) ||
       ((event.actor === "assistant" || event.actor === "user") && failureCue(eventText(event)))
     );
   }
   if (kind === "block") {
     return evidence.some((event) =>
-      ((event.kind === "tool_error" || (event.kind === "turn_end" && event.isError)) && blockCue(eventText(event))) ||
+      hasToolOutcome(event, ["blocked"]) ||
+      ((event.kind === "turn_end" && event.isError) && blockCue(eventText(event))) ||
       ((event.actor === "assistant" || event.actor === "user") && blockCue(eventText(event)))
     );
   }
@@ -205,11 +210,7 @@ function beatCompatible(kind: StoryBeatKind, evidence: EvidenceEvent[]): boolean
     );
   }
   if (kind === "success") {
-    return evidence.some((event) =>
-      (event.kind === "tool_result" && !event.isError) ||
-      (event.kind === "turn_end" && !event.isError && /(?:completed|success)/iu.test(eventText(event))) ||
-      (event.kind === "user_message" && successCue(eventText(event)))
-    );
+    return evidence.some((event) => hasToolOutcome(event, ["success"]));
   }
   if (kind === "reversal") {
     return evidence.some((event) => event.kind === "assistant_text" && reversalCue(eventText(event)));
@@ -291,6 +292,106 @@ function relationalBeatProblem(beats: ResolvedBeat[]): string | undefined {
   return undefined;
 }
 
+const STRUCTURAL_ANCHORS = new Set<StoryBeatKind>([
+  "failure",
+  "block",
+  "user_pushback",
+  "capability_gap",
+  "breakdown",
+  "correction",
+  "reversal",
+]);
+
+function storyOrders(story: VerifiedStoryArc, eventById: Map<string, EvidenceEvent>): { start: number; end: number } {
+  const orders = story.evidenceIds.map((id) => eventById.get(id)?.order).filter((order): order is number => order !== undefined);
+  return { start: Math.min(...orders), end: Math.max(...orders) };
+}
+
+function storyAnchorIds(story: VerifiedStoryArc): Set<string> {
+  return new Set(story.beats
+    .filter((beat) => STRUCTURAL_ANCHORS.has(beat.kind))
+    .flatMap((beat) => beat.evidenceIds));
+}
+
+/**
+ * A window is only a retrieval container, not an episode identity. Stories are
+ * duplicates when their verified evidence substantially overlaps, or when they
+ * share a structural turning-point event in the same temporal span.
+ */
+function sameUnderlyingEpisode(
+  left: VerifiedStoryArc,
+  right: VerifiedStoryArc,
+  eventById: Map<string, EvidenceEvent>,
+): boolean {
+  const rightEvidence = new Set(right.evidenceIds);
+  const sharedEvidence = left.evidenceIds.filter((id) => rightEvidence.has(id));
+  if (sharedEvidence.length === 0) return false;
+  if (sharedEvidence.length / Math.min(left.evidenceIds.length, right.evidenceIds.length) >= 0.5) return true;
+
+  const rightAnchors = storyAnchorIds(right);
+  const sharesAnchor = [...storyAnchorIds(left)].some((id) => rightAnchors.has(id));
+  if (!sharesAnchor) return false;
+
+  const leftOrders = storyOrders(left, eventById);
+  const rightOrders = storyOrders(right, eventById);
+  return leftOrders.start <= rightOrders.end && rightOrders.start <= leftOrders.end;
+}
+
+function confidenceWeight(confidence: VerifiedStoryArc["confidence"]): number {
+  return confidence === "high" ? 3 : confidence === "medium" ? 2 : 1;
+}
+
+function canonicalStoryOrder(
+  left: VerifiedStoryArc,
+  right: VerifiedStoryArc,
+  eventById: Map<string, EvidenceEvent>,
+): number {
+  const confidence = confidenceWeight(right.confidence) - confidenceWeight(left.confidence);
+  if (confidence !== 0) return confidence;
+  const evidence = right.evidenceIds.length - left.evidenceIds.length;
+  if (evidence !== 0) return evidence;
+  const beats = right.beats.length - left.beats.length;
+  if (beats !== 0) return beats;
+  const leftOrders = storyOrders(left, eventById);
+  const rightOrders = storyOrders(right, eventById);
+  return leftOrders.start - rightOrders.start || left.arcKind.localeCompare(right.arcKind) || left.id.localeCompare(right.id);
+}
+
+function deduplicateStories(
+  stories: VerifiedStoryArc[],
+  eventById: Map<string, EvidenceEvent>,
+): { stories: VerifiedStoryArc[]; duplicateIndexes: number[] } {
+  const remaining = new Set(stories.map((_story, index) => index));
+  const components: number[][] = [];
+
+  while (remaining.size > 0) {
+    const seed = remaining.values().next().value as number;
+    remaining.delete(seed);
+    const queue = [seed];
+    const component: number[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift() as number;
+      component.push(current);
+      for (const candidate of [...remaining]) {
+        if (sameUnderlyingEpisode(stories[current], stories[candidate], eventById)) {
+          remaining.delete(candidate);
+          queue.push(candidate);
+        }
+      }
+    }
+    components.push(component.sort((left, right) => left - right));
+  }
+
+  const canonicalIndexes = components.map((component) => [...component]
+    .sort((left, right) => canonicalStoryOrder(stories[left], stories[right], eventById))[0]);
+  const duplicateIndexes = components.flatMap((component, componentIndex) =>
+    component.filter((index) => index !== canonicalIndexes[componentIndex]));
+  const canonical = canonicalIndexes
+    .sort((left, right) => left - right)
+    .map((index, canonicalIndex) => ({ ...stories[index], id: `story:${canonicalIndex}` }));
+  return { stories: canonical, duplicateIndexes };
+}
+
 export interface StoryValidationResult {
   stories: VerifiedStoryArc[];
   rejected: Array<{ candidateIndex: number; reason: string }>;
@@ -308,6 +409,7 @@ export function validateStoryCandidates(
   const eventById = new Map(bundle.events.map((event) => [event.id, event]));
   const windowById = new Map(bundle.windows.map((window) => [window.id, window]));
   const stories: VerifiedStoryArc[] = [];
+  const storyCandidateIndexes: number[] = [];
   const rejected: StoryValidationResult["rejected"] = [];
 
   candidates.forEach((candidate, candidateIndex) => {
@@ -362,7 +464,12 @@ export function validateStoryCandidates(
       evidenceIds: evidenceUsed,
       confidence: candidate.confidence,
     });
+    storyCandidateIndexes.push(candidateIndex);
   });
 
-  return { stories, rejected };
+  const deduplicated = deduplicateStories(stories, eventById);
+  for (const storyIndex of deduplicated.duplicateIndexes) {
+    rejected.push({ candidateIndex: storyCandidateIndexes[storyIndex], reason: "duplicate-story-episode" });
+  }
+  return { stories: deduplicated.stories, rejected };
 }

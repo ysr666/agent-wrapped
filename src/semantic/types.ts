@@ -2,6 +2,10 @@ import type { AgentHost } from "../core/types.js";
 import type { MomentType } from "../moments/types.js";
 import type { SessionEventActor, SessionEventKind } from "../session-events/types.js";
 import type { AwardLocale } from "../awards/types.js";
+import type {
+  SemanticTestSummary,
+  SemanticToolCategory,
+} from "./toolOutcome.js";
 
 export interface SemanticEvidenceEvent {
   id: string;
@@ -10,9 +14,15 @@ export interface SemanticEvidenceEvent {
   kind: SessionEventKind;
   text?: string;
   toolName?: string;
+  /** Safe local classification; raw tool payloads never cross this boundary. */
+  toolCategory?: SemanticToolCategory;
   callId?: string;
   isError?: boolean;
+  /** For tool events: one of the locally classified SemanticToolOutcome values. */
   outcome?: string;
+  exitCode?: number;
+  errorClass?: string;
+  testSummary?: SemanticTestSummary;
 }
 
 export interface SemanticMomentHint {

@@ -7,6 +7,7 @@ import {
   buildSemanticEvidenceFromMoments,
   buildStoryMinerPrompt,
   createOpenAICompatibleNarrator,
+  classifyToolOutcome,
   generateSemanticStoryPersona,
   parseNarrationOutput,
   parseStoryMinerOutput,
@@ -117,14 +118,16 @@ test("P8 v2 story evidence is event-first and does not require a P3 Moment", () 
   assert.ok(evidence.events.some((event) => event.toolName === "computer_use"));
 });
 
-test("P8 v2 redacts common secrets and home-directory identity before remote evidence", () => {
+test("P8 v2 keeps raw tool payloads local and sends only structural tool evidence", () => {
   const evidence = buildSemanticEvidenceFromMoments(session(), []);
-  const joined = evidence.events.map((event) => event.text ?? "").join("\n");
-  assert.ok(evidence.redactionCount >= 2);
-  assert.doesNotMatch(joined, /abcdefgh/iu);
-  assert.doesNotMatch(joined, /\/Users\/alice\//u);
-  assert.match(joined, /\[REDACTED\]/u);
-  assert.match(joined, /\/Users\/\[USER\]\//u);
+  const remote = JSON.stringify(evidence);
+  const toolCall = evidence.events.find((event) => event.id === "event:e2");
+  const toolResult = evidence.events.find((event) => event.id === "event:e6");
+  assert.equal(toolCall?.text, undefined);
+  assert.equal(toolResult?.text, undefined);
+  assert.equal(toolCall?.toolCategory, "mutation");
+  assert.equal(toolResult?.outcome, "success");
+  assert.doesNotMatch(remote, /authorization|abcdefgh|\/Users\/alice\/work/u);
 });
 
 test("Story Miner prompt requires one local window and structure only", () => {
@@ -187,7 +190,7 @@ test("local grounding requires semantic support for correction, success, and a r
       windowId,
       arcKind: "mistake_then_correction",
       beats: [
-        { kind: "claim", evidenceIds: ["event:e1"] },
+        { kind: "setup", evidenceIds: ["event:e1"] },
         { kind: "correction", evidenceIds: ["event:e4"] },
       ],
       confidence: "medium",
@@ -213,9 +216,11 @@ test("local grounding requires semantic support for correction, success, and a r
   const fakeSuccessEvidence = {
     ...evidence,
     events: [
-      ...evidence.events.map((event) => event.id === "event:e6"
-        ? { ...event, actor: "assistant", kind: "assistant_text", text: "应该好了。", isError: undefined, outcome: undefined }
-        : event),
+      ...evidence.events.map((event) => event.id === "event:e4"
+        ? { ...event, actor: "assistant", kind: "assistant_text", text: "应该修好了。", isError: undefined, outcome: undefined }
+        : event.id === "event:e6"
+          ? { ...event, actor: "assistant", kind: "assistant_text", text: "应该好了。", isError: undefined, outcome: undefined }
+          : event),
       { id: "event:e7", order: 7, actor: "user", kind: "user_message", text: "还是不行。" },
     ],
     windows: evidence.windows.map((window) => window.id === windowId
@@ -269,6 +274,155 @@ test("local grounding still rejects unknown ids and backward chronology", () => 
     }],
   }));
   assert.equal(validateStoryCandidates(backward.candidates, evidence).rejected[0].reason, "non-chronological-beats");
+});
+
+test("remote semantic evidence excludes raw tool payload sentinels", () => {
+  const sentinels = [
+    "SOURCE_SENTINEL",
+    "RESULT_SENTINEL",
+    "token=remote-token",
+    "Cookie: session=remote-cookie",
+    "Authorization: Basic remote-basic",
+    "eyJhbGciOiJIUzI1NiJ9.remote.jwt",
+    "-----BEGIN PRIVATE KEY-----",
+    "github_pat_remote-token",
+    "postgres://user:password@localhost/app",
+    "mysql://user:password@127.0.0.1/app",
+  ];
+  const privatePayload = sentinels.join("\n");
+  const localEvents = [
+    { id: "call", host: "dsh", actor: "tool", kind: "tool_call", order: 0, callId: "CALL_ID_SENTINEL", toolName: "write", toolArguments: privatePayload },
+    { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 1, callId: "CALL_ID_SENTINEL", isError: false, text: privatePayload },
+  ];
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "egress-boundary",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: localEvents,
+  }, [], { coverageWindows: 1, maxEvents: 10 });
+  const remote = JSON.stringify(evidence);
+  for (const sentinel of [...sentinels, "CALL_ID_SENTINEL"]) assert.ok(!remote.includes(sentinel), `${sentinel} leaked into remote evidence`);
+  assert.equal(evidence.events.find((event) => event.id === "event:call")?.text, undefined);
+  assert.equal(evidence.events.find((event) => event.id === "event:result")?.text, undefined);
+  assert.equal(evidence.events.find((event) => event.id === "event:result")?.callId, "call:0");
+  assert.equal(localEvents[0].toolArguments, privatePayload);
+  assert.equal(localEvents[1].text, privatePayload);
+});
+
+test("local tool outcome classifier is conservative and supports DSH-shaped failures", () => {
+  const result = (toolName, text, isError = false) => classifyToolOutcome({
+    id: `event:${toolName}`, host: "dsh", actor: "tool", kind: isError ? "tool_error" : "tool_result", order: 0, toolName, text, isError,
+  });
+  assert.equal(result("test", "exit code 1; tests failed").outcome, "failure");
+  assert.equal(result("test", "0 passed, 3 failed").outcome, "failure");
+  assert.equal(result("write", "permission denied").outcome, "blocked");
+  assert.equal(result("read", "read 10 lines").outcome, "observation");
+  assert.equal(result("list", "exit code 0").outcome, "observation");
+  assert.equal(result("tool", "completed").outcome, "unknown");
+  assert.equal(result("test", "exit code 0; all tests passed").outcome, "success");
+  assert.equal(result("delete", "deleted").outcome, "success");
+});
+
+test("grounding accepts only classified tool success and assertion claims", () => {
+  const evidence = {
+    version: 2,
+    sessionId: "grounding-outcomes",
+    host: "dsh",
+    locale: "zh-CN",
+    momentHints: [],
+    redactionCount: 0,
+    truncated: false,
+    events: [
+      { id: "event:claim", order: 0, actor: "assistant", kind: "assistant_text", text: "我先看看目录。" },
+      { id: "event:correction", order: 1, actor: "assistant", kind: "assistant_text", text: "等等，我看错了。" },
+      { id: "event:failure", order: 2, actor: "tool", kind: "tool_result", toolName: "test", toolCategory: "test", outcome: "failure", exitCode: 1 },
+      { id: "event:observation", order: 3, actor: "tool", kind: "tool_result", toolName: "read", toolCategory: "observation", outcome: "observation" },
+      { id: "event:unknown", order: 4, actor: "tool", kind: "tool_result", toolName: "tool", toolCategory: "other", outcome: "unknown" },
+      { id: "event:workaround", order: 5, actor: "tool", kind: "tool_call", toolName: "write", toolCategory: "mutation" },
+      { id: "event:success", order: 6, actor: "tool", kind: "tool_result", toolName: "write", toolCategory: "mutation", outcome: "success", exitCode: 0 },
+    ],
+    windows: [{ id: "window:0", eventIds: ["event:claim", "event:correction", "event:failure", "event:observation", "event:unknown", "event:workaround", "event:success"], reasons: [] }],
+  };
+  const candidate = (beats) => [{ windowId: "window:0", arcKind: "failure_then_workaround", confidence: "high", beats }];
+  assert.equal(validateStoryCandidates([{ windowId: "window:0", arcKind: "mistake_then_correction", confidence: "high", beats: [
+    { kind: "claim", evidenceIds: ["event:claim"] }, { kind: "correction", evidenceIds: ["event:correction"] },
+  ]}], evidence).rejected[0].reason, "beat-kind-not-supported:claim");
+  assert.equal(validateStoryCandidates(candidate([
+    { kind: "failure", evidenceIds: ["event:failure"] }, { kind: "success", evidenceIds: ["event:observation"] }, { kind: "workaround", evidenceIds: ["event:workaround"] },
+  ]), evidence).rejected[0].reason, "beat-kind-not-supported:success");
+  assert.equal(validateStoryCandidates(candidate([
+    { kind: "failure", evidenceIds: ["event:failure"] }, { kind: "success", evidenceIds: ["event:unknown"] }, { kind: "workaround", evidenceIds: ["event:workaround"] },
+  ]), evidence).rejected[0].reason, "beat-kind-not-supported:success");
+  assert.equal(validateStoryCandidates(candidate([
+    { kind: "failure", evidenceIds: ["event:failure"] }, { kind: "workaround", evidenceIds: ["event:workaround"] }, { kind: "success", evidenceIds: ["event:success"] },
+  ]), evidence).stories.length, 1);
+});
+
+test("overlapping windows cannot emit duplicate canonical Stories", () => {
+  const evidence = {
+    version: 2,
+    sessionId: "overlap",
+    host: "dsh",
+    locale: "zh-CN",
+    momentHints: [],
+    redactionCount: 0,
+    truncated: false,
+    events: [
+      { id: "event:failure", order: 0, actor: "tool", kind: "tool_result", toolName: "test", outcome: "failure" },
+      { id: "event:workaround", order: 1, actor: "tool", kind: "tool_call", toolName: "write" },
+    ],
+    windows: [
+      { id: "window:A", eventIds: ["event:failure", "event:workaround"], reasons: [] },
+      { id: "window:B", eventIds: ["event:failure", "event:workaround"], reasons: [] },
+    ],
+  };
+  const beats = [{ kind: "failure", evidenceIds: ["event:failure"] }, { kind: "workaround", evidenceIds: ["event:workaround"] }];
+  const validation = validateStoryCandidates([
+    { windowId: "window:A", arcKind: "failure_then_workaround", confidence: "high", beats },
+    { windowId: "window:B", arcKind: "failure_then_workaround", confidence: "high", beats },
+  ], evidence);
+  assert.equal(validation.stories.length, 1);
+  assert.ok(validation.rejected.some((entry) => entry.reason === "duplicate-story-episode"));
+});
+
+test("persona uses evidence-connected episodes rather than retrieval windows", () => {
+  const evidence = {
+    version: 2,
+    sessionId: "persona-components",
+    host: "dsh",
+    locale: "zh-CN",
+    momentHints: [],
+    redactionCount: 0,
+    truncated: false,
+    events: ["a", "b", "c", "d"].map((id, order) => ({ id: `event:${id}`, order, actor: "assistant", kind: "assistant_text", text: id })),
+    windows: [{ id: "window:one-retrieval-container", eventIds: ["event:a", "event:b", "event:c", "event:d"], reasons: [] }],
+  };
+  const falseDawn = (id, evidenceIds) => ({
+    id,
+    windowId: "window:one-retrieval-container",
+    arcKind: "false_dawn",
+    beats: [
+      { kind: "claim", evidenceIds: [evidenceIds[0]] },
+      { kind: "failure", evidenceIds: [evidenceIds.at(-1)] },
+      { kind: "recovery", evidenceIds },
+      { kind: "success", evidenceIds },
+    ],
+    evidenceIds,
+    confidence: "high",
+  });
+  assert.equal(aggregatePersonaSignals([
+    falseDawn("story:0", ["event:a", "event:b"]),
+    falseDawn("story:1", ["event:c", "event:d"]),
+  ], evidence).find((signal) => signal.key === "premature_certainty")?.count, 2);
+  assert.equal(aggregatePersonaSignals([
+    falseDawn("story:0", ["event:a", "event:b", "event:c", "event:d"]),
+  ], evidence).find((signal) => signal.key === "premature_certainty")?.count, 1);
+  assert.equal(aggregatePersonaSignals([
+    falseDawn("story:0", ["event:a", "event:b"]),
+    falseDawn("story:1", ["event:a", "event:c"]),
+  ], evidence).find((signal) => signal.key === "premature_certainty")?.count, 1);
 });
 
 test("persona aggregation counts one underlying episode once across Story and Moment views", () => {

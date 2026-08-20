@@ -16,7 +16,7 @@ const ZH_BEATS: Record<StoryBeatKind, string> = {
   correction: "改口纠正",
   workaround: "换路继续",
   recovery: "恢复干活",
-  success: "成功",
+  success: "可观察动作成功",
   reversal: "反转",
 };
 
@@ -32,7 +32,7 @@ const EN_BEATS: Record<StoryBeatKind, string> = {
   correction: "Correction",
   workaround: "Workaround",
   recovery: "Recovery",
-  success: "Success",
+  success: "Observable action succeeded",
   reversal: "Reversal",
 };
 
@@ -44,6 +44,14 @@ function clip(text: string, max = 140): string {
 function levelLabel(level: "low" | "medium" | "high", zh: boolean): string {
   if (zh) return level === "high" ? "高" : level === "medium" ? "中" : "低";
   return level;
+}
+
+function safeEventExcerpt(event: SemanticEvidenceBundle["events"][number]): string | undefined {
+  if (event.text) return clip(event.text);
+  if (!event.toolName) return undefined;
+  const details = [event.toolCategory, event.outcome, event.exitCode === undefined ? undefined : `exit ${event.exitCode}`]
+    .filter((value): value is string => value !== undefined);
+  return `${event.toolName}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
 }
 
 export function renderSemanticStoryPersonaText(
@@ -63,9 +71,10 @@ export function renderSemanticStoryPersonaText(
     story.beats.forEach((beat, index) => {
       const label = zh ? ZH_BEATS[beat.kind] : EN_BEATS[beat.kind];
       const excerpts = beat.evidenceIds
-        .map((id) => eventById.get(id)?.text)
-        .filter((text): text is string => !!text)
-        .map((text) => clip(text));
+        .map((id) => eventById.get(id))
+        .filter((event): event is SemanticEvidenceBundle["events"][number] => !!event)
+        .map(safeEventExcerpt)
+        .filter((text): text is string => !!text);
       lines.push(`${index + 1}. ${label}${excerpts.length > 0 ? ` — ${excerpts.join(" / ")}` : ""}`);
     });
     if (card?.commentary) {

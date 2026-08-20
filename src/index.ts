@@ -42,6 +42,7 @@ export * from "./review/reviewer.js";
 export * from "./review/runner.js";
 
 export * from "./semantic/types.js";
+export * from "./semantic/toolOutcome.js";
 export * from "./semantic/evidence.js";
 export * from "./semantic/prompt.js";
 export * from "./semantic/storyMiner.js";

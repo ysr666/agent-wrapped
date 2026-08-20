@@ -3,6 +3,7 @@ import type { RankedMoment } from "../moments/types.js";
 import { sessionEventsFromMessages } from "../session-events/fromMessages.js";
 import type { SessionEvent } from "../session-events/types.js";
 import { createWrappedReport } from "../wrapped/wrappedReport.js";
+import { classifyToolOutcome } from "./toolOutcome.js";
 import type {
   SemanticEvidenceBundle,
   SemanticEvidenceEvent,
@@ -89,12 +90,14 @@ function certaintyCue(text: string | undefined): boolean {
   return /(?:修好了|解决了|找到根因|问题.*明确|可以结束|没问题了|fixed|solved|root cause|done|all good)/iu.test(text);
 }
 
-function eventSignal(event: SessionEvent): { score: number; reasons: string[] } {
+function eventSignal(event: SessionEvent, toolNames: Map<string, string>): { score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
-  if (event.kind === "tool_error") {
+  const resolvedToolName = event.toolName ?? (event.callId ? toolNames.get(event.callId) : undefined);
+  const toolOutcome = classifyToolOutcome(event, resolvedToolName).outcome;
+  if (toolOutcome === "failure" || toolOutcome === "blocked") {
     score += 9;
-    reasons.push("tool-error");
+    reasons.push(toolOutcome === "blocked" ? "tool-blocked" : "tool-failure");
   } else if (event.kind === "tool_call") {
     score += 2;
     reasons.push("tool-call");
@@ -131,6 +134,7 @@ function selectWindows(
   events: SessionEvent[],
   momentMessageIndexes: Set<number>,
   options: SemanticEvidenceOptions,
+  toolNames: Map<string, string>,
 ): WindowCandidate[] {
   if (events.length === 0) return [];
   const radius = clampInt(options.eventRadius, 3, 1, 8);
@@ -139,7 +143,7 @@ function selectWindows(
   const candidates: WindowCandidate[] = [];
 
   events.forEach((event, index) => {
-    const signal = eventSignal(event);
+    const signal = eventSignal(event, toolNames);
     const momentBoost = event.messageIndex !== undefined && momentMessageIndexes.has(event.messageIndex) ? 3 : 0;
     if (signal.score + momentBoost <= 0) return;
     candidates.push({
@@ -212,17 +216,12 @@ function momentHints(
   return { hints, messageIndexes, truncated: rankedMoments.length > selected.length };
 }
 
-function eventText(event: SessionEvent, toolNames: Map<string, string>): string | undefined {
-  if (event.kind === "tool_call") {
-    const args = event.toolArguments?.trim();
-    return `${event.toolName ?? "tool"}${args ? ` arguments=${args}` : ""}`;
-  }
-  if (event.kind === "tool_result" || event.kind === "tool_error") {
-    const name = event.toolName ?? (event.callId ? toolNames.get(event.callId) : undefined) ?? "tool";
-    const suffix = event.text?.trim() || event.outcome;
-    return `${name} ${event.kind === "tool_error" ? "error" : "result"}${suffix ? `: ${suffix}` : ""}`;
-  }
-  if (event.kind === "turn_end") return `turn ended: ${event.outcome ?? "unknown"}${event.text ? ` — ${event.text}` : ""}`;
+function eventText(event: SessionEvent): string | undefined {
+  // The remote semantic boundary never receives raw tool arguments/results or
+  // unstructured turn-end error messages. Tool facts are added separately as
+  // classified, allowlisted fields below.
+  if (event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error") return undefined;
+  if (event.kind === "turn_end") return `turn ended: ${event.outcome ?? "unknown"}`;
   return event.text;
 }
 
@@ -237,8 +236,14 @@ export function buildSemanticEvidenceFromMoments(
 ): SemanticEvidenceBundle {
   const locale = options.locale ?? "zh-CN";
   const events = normalizedEvents(session);
+  const toolNames = new Map<string, string>();
+  const remoteCallIds = new Map<string, string>();
+  for (const event of events) {
+    if (event.kind === "tool_call" && event.callId && event.toolName) toolNames.set(event.callId, event.toolName);
+    if (event.callId && !remoteCallIds.has(event.callId)) remoteCallIds.set(event.callId, `call:${remoteCallIds.size}`);
+  }
   const preliminaryHints = momentHints(rankedMoments, events, new Set(events.map((event) => event.id)), options);
-  const windows = selectWindows(events, preliminaryHints.messageIndexes, options);
+  const windows = selectWindows(events, preliminaryHints.messageIndexes, options, toolNames);
   const desiredIndexes = new Set<number>();
   for (const window of windows) for (let index = window.start; index <= window.end; index += 1) desiredIndexes.add(index);
 
@@ -251,13 +256,15 @@ export function buildSemanticEvidenceFromMoments(
   let redactionCount = 0;
   const evidenceEvents: SemanticEvidenceEvent[] = [];
   const includedEventIds = new Set<string>();
-  const toolNames = new Map<string, string>();
-  for (const event of events) if (event.kind === "tool_call" && event.callId && event.toolName) toolNames.set(event.callId, event.toolName);
 
   for (const eventIndex of orderedIndexes.slice(0, maxEvents)) {
     const event = events[eventIndex];
     if (!event) continue;
-    const rawText = eventText(event, toolNames);
+    const resolvedToolName = event.toolName ?? (event.callId ? toolNames.get(event.callId) : undefined);
+    const toolSummary = event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error"
+      ? classifyToolOutcome(event, resolvedToolName)
+      : undefined;
+    const rawText = eventText(event);
     let text: string | undefined;
     if (rawText) {
       const redacted = redactSemanticText(rawText);
@@ -279,10 +286,17 @@ export function buildSemanticEvidenceFromMoments(
       actor: event.actor,
       kind: event.kind,
       text,
-      toolName: event.toolName ?? (event.callId ? toolNames.get(event.callId) : undefined),
-      callId: event.callId,
+      toolName: resolvedToolName,
+      toolCategory: toolSummary?.toolCategory,
+      // Call IDs are useful for local pairing but host-provided values are not
+      // trusted as remote-safe identifiers. Preserve the relationship with an
+      // opaque per-evidence alias instead.
+      callId: event.callId ? remoteCallIds.get(event.callId) : undefined,
       isError: event.isError,
-      outcome: event.outcome,
+      outcome: toolSummary?.outcome ?? event.outcome,
+      exitCode: toolSummary?.exitCode,
+      errorClass: toolSummary?.errorClass,
+      testSummary: toolSummary?.testSummary,
     });
   }
 

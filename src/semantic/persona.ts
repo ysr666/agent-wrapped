@@ -25,14 +25,12 @@ function unique(values: string[]): string[] {
 }
 
 interface PersonaEvidenceUnit {
-  episodeKeys: string[];
   eventIds: string[];
   outputEvidenceIds: string[];
 }
 
 function storyUnit(story: VerifiedStoryArc): PersonaEvidenceUnit {
   return {
-    episodeKeys: [`window:${story.windowId}`],
     eventIds: [...story.evidenceIds],
     outputEvidenceIds: [...story.evidenceIds],
   };
@@ -40,22 +38,14 @@ function storyUnit(story: VerifiedStoryArc): PersonaEvidenceUnit {
 
 function momentUnit(
   moment: SemanticEvidenceBundle["momentHints"][number],
-  bundle: SemanticEvidenceBundle,
 ): PersonaEvidenceUnit {
-  const eventSet = new Set(moment.eventIds);
-  const episodeKeys = bundle.windows
-    .filter((window) => window.eventIds.some((id) => eventSet.has(id)))
-    .map((window) => `window:${window.id}`);
   return {
-    episodeKeys: episodeKeys.length > 0 ? episodeKeys : [`moment:${moment.id}`],
     eventIds: [...moment.eventIds],
     outputEvidenceIds: unique([moment.id, ...moment.eventIds]),
   };
 }
 
 function overlaps(left: PersonaEvidenceUnit, right: PersonaEvidenceUnit): boolean {
-  const rightEpisodes = new Set(right.episodeKeys);
-  if (left.episodeKeys.some((key) => rightEpisodes.has(key))) return true;
   const rightEvents = new Set(right.eventIds);
   return left.eventIds.some((id) => rightEvents.has(id));
 }
@@ -87,9 +77,9 @@ function episodeComponents(units: PersonaEvidenceUnit[]): PersonaEvidenceUnit[][
 }
 
 /**
- * Persona magnitude counts underlying local episodes, not every representation
- * of them. If one false dawn is present as both a verified Story and a P3 Moment,
- * it contributes one episode instead of being double-counted into a higher level.
+ * Persona magnitude counts evidence-connected local episodes, not every
+ * representation. Retrieval windows never define an episode: a Story and a P3
+ * Moment merge only when they actually share local evidence.
  */
 export function aggregatePersonaSignals(
   stories: VerifiedStoryArc[],
@@ -135,7 +125,7 @@ export function aggregatePersonaSignals(
   return specs.flatMap((spec) => {
     const units: PersonaEvidenceUnit[] = [
       ...stories.filter((story) => spec.storyKinds.includes(story.arcKind)).map(storyUnit),
-      ...bundle.momentHints.filter((moment) => spec.momentTypes.includes(moment.type)).map((moment) => momentUnit(moment, bundle)),
+      ...bundle.momentHints.filter((moment) => spec.momentTypes.includes(moment.type)).map(momentUnit),
     ];
     if (units.length === 0) return [];
 

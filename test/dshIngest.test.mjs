@@ -148,6 +148,27 @@ test("P5 emits an explicit warning when assistant/message exists but its envelop
   assert.ok(session.diagnostics.some((entry) => entry.code === "no-visible-assistant-messages"));
 });
 
+test("P5 tolerates a real-shaped image-only user message without inventing text", () => {
+  const imageOnly = [
+    JSON.stringify({ type: "session", version: 0, id: "image-only-session", createdAt: 1784973850091 }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 1,
+      data: {
+        id: "image-1",
+        role: "user",
+        content: [{ type: "image", mimeType: "image/png", data: "opaque-local-bytes" }],
+        source: { kind: "user" },
+      },
+    }),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(imageOnly);
+  assert.equal(session.messages.length, 0);
+  assert.equal(session.events?.length, 0);
+  assert.ok(session.diagnostics.some((entry) => entry.code === "no-visible-assistant-messages"));
+});
+
 test("P5 resolves the DSH sessions root from DSH_HOME", () => {
   const root = resolveDshSessionsRoot(undefined, { DSH_HOME: "/tmp/custom-dsh" });
   assert.equal(root, join("/tmp/custom-dsh", "sessions"));
