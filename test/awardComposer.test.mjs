@@ -206,6 +206,39 @@ test("P3.5 keeps the strongest visible story instead of repeating its constituen
   assert.ok(result.rejected.some((candidate) => candidate.momentId === "emotion-view" && candidate.reason === "overlaps-selected-visible-evidence"));
 });
 
+test("P3.5 never turns formatting or repeated worklog prose into a catchphrase", () => {
+  const result = composeAwards([
+    ranked({
+      id: "table-separator",
+      type: "repeated_pattern",
+      text: "|---|---|",
+      events: ["table-1", "table-2", "table-3"],
+      score: 90,
+      count: 3,
+    }),
+    ranked({
+      id: "repeated-instructions",
+      type: "repeated_pattern",
+      text: "打开 package.json，删掉旧依赖，保存重启，再执行上面的安装命令。",
+      events: ["instruction-1", "instruction-2", "instruction-3", "instruction-4"],
+      score: 88,
+      count: 4,
+    }),
+    ranked({
+      id: "natural-tic",
+      type: "repeated_pattern",
+      text: "先确认一下。",
+      events: ["tic-1", "tic-2", "tic-3"],
+      score: 70,
+      count: 3,
+    }),
+  ]);
+
+  assert.deepEqual(result.awards.map((award) => award.momentId), ["natural-tic"]);
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "table-separator" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "repeated-instructions" && candidate.reason === "not-shareable-repetition"));
+});
+
 test("P3.5 does not force weak moments into the final Wrapped", () => {
   const result = composeAwards([
     ranked({

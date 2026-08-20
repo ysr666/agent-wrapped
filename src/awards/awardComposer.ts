@@ -103,6 +103,26 @@ function isRepeatedPattern(moment: RankedMoment): boolean {
   return moment.type === "repeated_pattern";
 }
 
+function isShareableRepeatedPattern(moment: RankedMoment): boolean {
+  if (!isRepeatedPattern(moment)) return true;
+  // Named verbal families are already constrained by the local event layer
+  // (for example wait-reset or root-cause-found). For an unclassified exact or
+  // fuzzy repeat, require a compact human-readable phrase before promoting it
+  // to a user-facing catchphrase. This prevents Markdown separators, filenames,
+  // repeated checklist prose, and sentence-split code fragments from becoming
+  // "人格" by accident.
+  if (moment.family) return true;
+  if ((moment.count ?? 0) < 3) return false;
+
+  const text = moment.primaryText.trim();
+  if (text.length < 4 || text.length > 32) return false;
+  if (/[`|]/u.test(text)) return false;
+  if (/(?:^|[\s/])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?:$|[\s,，。])/u.test(text)) return false;
+  const humanCharacters = (text.match(/[\p{L}\p{Script=Han}]/gu) ?? []).length;
+  const visibleCharacters = (text.match(/[^\s]/gu) ?? []).length;
+  return humanCharacters >= 4 && humanCharacters / Math.max(1, visibleCharacters) >= 0.45;
+}
+
 function overlapReason(
   candidate: RankedMoment,
   candidateKind: AwardKind,
@@ -218,6 +238,10 @@ export function composeAwards(
     }
     if (moment.scores.confidence < minConfidence) {
       rejected.push({ momentId: moment.id, reason: "below-confidence-threshold" });
+      continue;
+    }
+    if (!isShareableRepeatedPattern(moment)) {
+      rejected.push({ momentId: moment.id, reason: "not-shareable-repetition" });
       continue;
     }
     eligible.push({ moment, kind: awardKindFor(moment) });

@@ -41,6 +41,7 @@ export interface Award {
 export type AwardRejectionReason =
   | "below-fun-threshold"
   | "below-confidence-threshold"
+  | "not-shareable-repetition"
   | "duplicate-award-kind"
   | "overlaps-selected-moment"
   | "overlaps-selected-visible-evidence"
