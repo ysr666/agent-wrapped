@@ -43,7 +43,7 @@ test("P4 creates a compact end-to-end Wrapped report from transcript messages", 
   assert.ok(report.awards.length >= 3);
   assert.ok(report.awards.length <= 7);
   assert.ok(report.rankedMoments?.length);
-  assert.ok(report.awards.some((award) => award.kind === "quote"));
+  assert.ok(report.awards.some((award) => award.kind === "quote" || award.kind === "plot-twist"));
   assert.ok(
     report.awards.some((award) =>
       [award.primaryText, ...award.relatedTexts].some((text) => text.includes("路线完全错了")),

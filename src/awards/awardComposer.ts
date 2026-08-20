@@ -5,6 +5,7 @@ import type {
   AwardComposition,
   AwardKind,
   AwardLocale,
+  AwardRejectionReason,
   RejectedAwardCandidate,
 } from "./types.js";
 
@@ -98,38 +99,60 @@ function displaySignature(moment: RankedMoment): string {
     .join("→");
 }
 
-function overlapsSelectedStory(
+function isRepeatedPattern(moment: RankedMoment): boolean {
+  return moment.type === "repeated_pattern";
+}
+
+function overlapReason(
   candidate: RankedMoment,
   candidateKind: AwardKind,
   selected: Array<{ moment: RankedMoment; kind: AwardKind }>,
   maxContainmentOverlap: number,
-): boolean {
+): AwardRejectionReason | undefined {
   const signature = displaySignature(candidate);
 
   for (const item of selected) {
-    if (signature.length > 0 && signature === displaySignature(item.moment)) return true;
-
-    const overlap = setOverlap(candidate.eventIds, item.moment.eventIds);
-    if (overlap.intersection === 0) continue;
-
-    // Identical event sets are the same underlying story even when P2 emitted
-    // several structural views of it.
-    if (
-      overlap.containment === 1 &&
-      new Set(candidate.eventIds).size === new Set(item.moment.eventIds).size
-    ) {
-      return true;
+    if (signature.length > 0 && signature === displaySignature(item.moment)) {
+      return "overlaps-selected-moment";
     }
 
-    // Within the same user-visible award family, strongly overlapping graph
-    // structures should collapse. Across different award families, sharing a
-    // line is allowed when the extra context genuinely changes the joke.
-    if (candidateKind === item.kind && overlap.containment > maxContainmentOverlap) {
-      return true;
+    const overlap = setOverlap(candidate.eventIds, item.moment.eventIds);
+    if (overlap.intersection > 0) {
+      // Identical event sets are the same underlying story even when P2 emitted
+      // several structural views of it.
+      if (
+        overlap.containment === 1 &&
+        new Set(candidate.eventIds).size === new Set(item.moment.eventIds).size
+      ) {
+        return "overlaps-selected-moment";
+      }
+
+      // Within the same user-visible award family, strongly overlapping graph
+      // structures should collapse. Across different award families, sharing a
+      // line can be valuable only when both cards have genuinely different
+      // visible evidence.
+      if (candidateKind === item.kind && overlap.containment > maxContainmentOverlap) {
+        return "overlaps-selected-moment";
+      }
+    }
+
+    // Event IDs can differ across P2 views of the same displayed messages.
+    // A stronger plot card should therefore suppress a weaker constituent quote
+    // or emotional line, instead of making the Wrapped repeat one episode in
+    // several card costumes. Repetition remains an exception: its value is the
+    // cross-session count and examples, so one shared instance is not enough to
+    // make it redundant.
+    const visibleOverlap = setOverlap(candidate.messageIndexes.map(String), item.moment.messageIndexes.map(String));
+    if (
+      !isRepeatedPattern(candidate) &&
+      !isRepeatedPattern(item.moment) &&
+      visibleOverlap.containment === 1
+    ) {
+      return "overlaps-selected-visible-evidence";
     }
   }
 
-  return false;
+  return undefined;
 }
 
 function toAward(moment: RankedMoment, kind: AwardKind, locale: AwardLocale): Award {
@@ -159,10 +182,11 @@ function toAward(moment: RankedMoment, kind: AwardKind, locale: AwardLocale): Aw
 /**
  * P3.5: turn ranked Moments into a small, diverse set of user-facing awards.
  *
- * The first pass protects the three MVP questions when strong candidates exist:
- * the best quote, the strongest repeated verbal pattern, and the biggest
- * boomerang. The second pass fills the remaining slots with the best diverse
- * side moments. P3.5 never reparses or rewrites transcript text.
+ * Moment cards compete by entertainment score, subject to factual confidence,
+ * card-kind diversity, and visible-evidence deduplication. A high-payoff plot
+ * therefore beats weaker constituent quotes instead of turning one episode
+ * into several near-identical cards. P3.5 never reparses or rewrites transcript
+ * text.
  */
 export function composeAwards(
   rankedMoments: RankedMoment[],
@@ -220,15 +244,14 @@ export function composeAwards(
       reject(candidate, "duplicate-award-kind");
       return false;
     }
-    if (
-      overlapsSelectedStory(
-        candidate.moment,
-        candidate.kind,
-        selected,
-        maxContainmentOverlap,
-      )
-    ) {
-      reject(candidate, "overlaps-selected-moment");
+    const overlap = overlapReason(
+      candidate.moment,
+      candidate.kind,
+      selected,
+      maxContainmentOverlap,
+    );
+    if (overlap) {
+      reject(candidate, overlap);
       return false;
     }
 
@@ -237,20 +260,6 @@ export function composeAwards(
     selected.push({ moment: candidate.moment, kind: candidate.kind });
     kindCounts.set(candidate.kind, (kindCounts.get(candidate.kind) ?? 0) + 1);
     return true;
-  }
-
-  const coreGroups: Array<(candidate: AwardCandidate) => boolean> = [
-    (candidate) => candidate.kind === "quote",
-    (candidate) => candidate.kind === "catchphrase" || candidate.kind === "wolf-cry",
-    (candidate) => candidate.kind === "boomerang",
-  ];
-
-  for (const matchesCoreGroup of coreGroups) {
-    if (awards.length >= maxAwards) break;
-    for (const candidate of eligible) {
-      if (finalized.has(candidate.moment.id) || !matchesCoreGroup(candidate)) continue;
-      if (trySelect(candidate)) break;
-    }
   }
 
   for (const candidate of eligible) {

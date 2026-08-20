@@ -14,13 +14,18 @@ function ranked({
   evidence = [],
   family,
   count,
+  messageIndexes,
 }) {
   return {
     id,
     type,
     eventIds: events,
     relationIds: [],
-    messageIndexes: events.map((_, index) => index),
+    messageIndexes: messageIndexes ?? events.map((event) => {
+      let hash = 0;
+      for (const character of event) hash = (hash * 31 + character.codePointAt(0)) >>> 0;
+      return hash;
+    }),
     primaryText: text,
     relatedTexts: related,
     family,
@@ -143,6 +148,62 @@ test("P3.5 collapses identical underlying stories emitted as different moment ty
   assert.equal(result.awards.length, 1);
   assert.equal(result.awards[0].momentId, "one-liner");
   assert.ok(result.rejected.some((candidate) => candidate.momentId === "plot-twist" && candidate.reason === "overlaps-selected-moment"));
+});
+
+test("P3.5 keeps the strongest visible story instead of repeating its constituent lines", () => {
+  const result = composeAwards([
+    ranked({
+      id: "false-dawn",
+      type: "false_dawn",
+      text: "已经修好了。",
+      related: ["等等，不对。"],
+      events: ["structural-view-a", "structural-view-b"],
+      messageIndexes: [41, 42],
+      score: 92,
+    }),
+    ranked({
+      id: "plot-view",
+      type: "plot_twist",
+      text: "等等，不对。",
+      related: ["已经修好了。"],
+      events: ["separate-graph-view"],
+      messageIndexes: [41, 42],
+      score: 87,
+    }),
+    ranked({
+      id: "quote-view",
+      type: "one_liner",
+      text: "等等，不对。",
+      events: ["line-view"],
+      messageIndexes: [42],
+      score: 68,
+      evidence: ["correction:84"],
+    }),
+    ranked({
+      id: "emotion-view",
+      type: "one_liner",
+      text: "已经修好了。",
+      events: ["emotion-view"],
+      messageIndexes: [41],
+      score: 54,
+      evidence: ["celebration:64"],
+    }),
+    ranked({
+      id: "independent-catchphrase",
+      type: "repeated_pattern",
+      text: "先跑一下 test。",
+      events: ["repeat-a", "repeat-b"],
+      messageIndexes: [41, 77],
+      score: 69,
+      family: "test:neutral",
+      count: 6,
+    }),
+  ]);
+
+  assert.deepEqual(result.awards.map((award) => award.kind), ["premature-celebration", "catchphrase"]);
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "plot-view" && candidate.reason === "overlaps-selected-visible-evidence"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "quote-view" && candidate.reason === "overlaps-selected-visible-evidence"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "emotion-view" && candidate.reason === "overlaps-selected-visible-evidence"));
 });
 
 test("P3.5 does not force weak moments into the final Wrapped", () => {

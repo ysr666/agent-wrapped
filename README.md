@@ -59,7 +59,7 @@ A P3 Moment can help P8 choose context, but it is only a **secondary hint**. It 
 - ✅ **P1 — Moment Graph**: `repeats`, `similar_to`, `same_topic`, `contradicts`, `retracts`, `followed_by`, and `celebrates_before` relations.
 - ✅ **P2 — MomentBuilder**: composes graph structure into `one_liner`, `repeated_pattern`, `boomerang`, `false_dawn`, `plot_twist`, and `correction_arc` moments.
 - ✅ **P3 — MomentRanker**: ranks complete moments with separate `funScore` and `confidence`, plus standalone quality, context payoff, surprise, rarity, readability, and structural strength.
-- ✅ **P3.5 — AwardComposer**: protects the core quote/repetition/boomerang slots, fills remaining slots with strong side moments, deduplicates overlapping views, and does not force weak cards.
+- ✅ **P3.5 — AwardComposer**: lets grounded Moments compete on entertainment value, deduplicates overlapping visible evidence across card kinds, and does not force weak cards.
 - ✅ **P4 — WrappedReport / output**: runs P0→P3.5 end to end and preserves original source wording.
 - ✅ **P5 — Session ingestion**: host-neutral `IngestedSession`; current DeepSeek Harness JSONL/Zstandard support. DSH now also recovers observable `tool/call`, `tool/result`, and `turn/end` records into a host-neutral `SessionEvent[]` stream.
 - ✅ **P6 — Real-session evaluation / calibration**: bounded human-review cases, deterministic A/B comparisons, keep/drop/skip, fun ratings and missed moments.

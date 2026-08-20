@@ -43,6 +43,7 @@ export type AwardRejectionReason =
   | "below-confidence-threshold"
   | "duplicate-award-kind"
   | "overlaps-selected-moment"
+  | "overlaps-selected-visible-evidence"
   | "award-limit";
 
 export interface RejectedAwardCandidate {
