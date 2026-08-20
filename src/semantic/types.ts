@@ -66,14 +66,18 @@ export type StoryBeatKind =
   | "failure"
   | "block"
   | "user_pushback"
+  | "capability_gap"
+  | "breakdown"
   | "correction"
   | "workaround"
   | "recovery"
   | "success"
   | "reversal";
 
-/** First LLM pass: structure only. No titles, summaries, persona, or scores. */
+/** First LLM pass: one local episode's structure only. No titles, summaries, persona, or scores. */
 export interface SemanticStoryCandidate {
+  /** Every beat must be supported by events inside this one bounded story window. */
+  windowId: string;
   arcKind: StoryArcKind;
   beats: Array<{
     kind: StoryBeatKind;
@@ -89,6 +93,8 @@ export interface VerifiedStoryBeat {
 
 export interface VerifiedStoryArc {
   id: string;
+  /** Preserved so downstream aggregation can deduplicate alternate views of one episode. */
+  windowId: string;
   arcKind: StoryArcKind;
   beats: VerifiedStoryBeat[];
   evidenceIds: string[];
@@ -104,7 +110,7 @@ export type PersonaSignalKey =
   | "premature_certainty"
   | "repetition";
 
-/** Deterministic aggregation from verified stories + P3 moments; not LLM scores. */
+/** Deterministic, episode-deduplicated aggregation from verified stories + P3 moments; not LLM scores. */
 export interface SemanticPersonaSignal {
   key: PersonaSignalKey;
   label: string;
