@@ -4,7 +4,9 @@ import type { SessionEventActor, SessionEventKind } from "../session-events/type
 import type { AwardLocale } from "../awards/types.js";
 import type {
   SemanticTestSummary,
+  SemanticFollowupRelation,
   SemanticToolCategory,
+  SemanticToolOperation,
 } from "./toolOutcome.js";
 
 export interface SemanticEvidenceEvent {
@@ -16,7 +18,13 @@ export interface SemanticEvidenceEvent {
   toolName?: string;
   /** Safe local classification; raw tool payloads never cross this boundary. */
   toolCategory?: SemanticToolCategory;
+  /** Coarse, allowlisted local action class; never a command, path, or argument. */
+  toolOperation?: SemanticToolOperation;
   callId?: string;
+  /** Opaque alias of the failed call this action directly follows, when known. */
+  followupOfCallId?: string;
+  /** Locally determined retry/alternative relationship; no arguments are exposed. */
+  followupRelation?: SemanticFollowupRelation;
   isError?: boolean;
   /** For tool events: one of the locally classified SemanticToolOutcome values. */
   outcome?: string;
@@ -150,6 +158,8 @@ export interface SemanticStoryPersonaReport {
   stories: VerifiedStoryArc[];
   personaSignals: SemanticPersonaSignal[];
   narration?: SemanticNarration;
+  /** Editorial narration is optional; verified local structure remains usable if it is unavailable. */
+  narrationUnavailable?: boolean;
   insufficientEvidence?: string;
   evidenceUsed: string[];
 }

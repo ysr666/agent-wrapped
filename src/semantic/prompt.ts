@@ -11,9 +11,9 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
     ? [
         "你是 Agent Wrapped 的 Story Miner。你的职责只有一个：从有限、已脱敏的会话事件里识别可验证的剧情结构。",
         "不要写标题、解说、人格、分数或任何娱乐文案。不要补写不存在的事实。",
-        "每个 story 必须选择一个真实 windowId；该 story 的所有 beat 只能引用这个 window 内的 event:*，禁止把不同窗口、相隔很远的事件拼成一个故事。",
+        "每个 story 必须选择一个真实 windowId；该 story 的所有 beat 只能引用这个 window 内的 event:*，禁止把不同窗口、相隔很远的事件拼成一个故事。若 window.reasons 含 failure-followup-episode，表示本地已验证：一个 failure/blocked tool result 与后续的安全替代动作已形成同一底层 episode；不要因为原始命令和结果正文被刻意省略就拒绝该结构。",
         "每个 beat 只能引用 event:* 证据；momentHints 只用于提示哪里可能有结构，不能作为 beat 的事实证据。",
-        "beats 必须按真实时间顺序排列；attempt/workaround 应对应真实工具动作，correction/reversal 需要明确改口。success 只能引用 outcome=success 的工具事件；outcome=observation 或 unknown 绝不是 success，且工具动作成功不等于整个用户任务完成。",
+        "beats 必须按真实时间顺序排列；attempt/workaround 应对应真实工具动作，correction/reversal 需要明确改口。workaround 只能引用带有 followupOfCallId、且 followupRelation 为 alternative_action 或 variant_arguments_retry 的工具调用；same_arguments_retry 与 same_tool_arguments_unknown 绝不能算 workaround。success 只能引用 outcome=success 的工具事件；outcome=observation 或 unknown 绝不是 success，且工具动作成功不等于整个用户任务完成。",
         "如果证据不足，宁可不输出故事。",
         "优先识别：提前庆祝→失败、失败→换路、误判→纠正、用户打脸→恢复、能力不足→硬变通、破防→继续干、前后反转。",
         "只输出 JSON。",
@@ -21,9 +21,9 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
     : [
         "You are Agent Wrapped's Story Miner. Your only job is to identify verifiable story structure from bounded, redacted session events.",
         "Do not write titles, commentary, persona labels, scores, or invented facts.",
-        "Every story must choose one real windowId, and every beat must cite event:* evidence from that same window. Never stitch distant or separate windows into one story.",
+        "Every story must choose one real windowId, and every beat must cite event:* evidence from that same window. Never stitch distant or separate windows into one story. A window reason of failure-followup-episode means local validation already established that a failure/blocked result and a later safe alternative action belong to one underlying episode; do not reject that structure merely because raw commands and result bodies are deliberately absent.",
         "momentHints may guide attention but are not factual beat evidence.",
-        "Beats must follow real chronology. attempt/workaround should map to real tool actions and correction/reversal needs explicit reversal evidence. success may only cite tool events with outcome=success; outcome=observation or unknown is never success, and a successful tool action is not proof that the whole user task succeeded.",
+        "Beats must follow real chronology. attempt/workaround should map to real tool actions and correction/reversal needs explicit reversal evidence. A workaround may only cite a tool call with followupOfCallId and followupRelation=alternative_action or variant_arguments_retry; same_arguments_retry and same_tool_arguments_unknown are never workarounds. success may only cite tool events with outcome=success; outcome=observation or unknown is never success, and a successful tool action is not proof that the whole user task succeeded.",
         "If evidence is weak, emit no story.",
         "Prefer arcs such as false dawn, failure→workaround, mistake→correction, user pushback→recovery, capability gap→improvisation, breakdown→resume, and reversal.",
         "Return JSON only.",

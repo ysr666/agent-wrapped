@@ -255,26 +255,29 @@ function arcPatternValid(candidate: SemanticStoryCandidate, beats: ResolvedBeat[
   }
 }
 
-function toolSignature(event: EvidenceEvent): string {
-  return `${event.toolName ?? ""}|${event.text ?? ""}`.trim();
-}
-
 function relationalBeatProblem(beats: ResolvedBeat[]): string | undefined {
   for (let index = 0; index < beats.length; index += 1) {
     const beat = beats[index];
     const prior = beats.slice(0, index);
     if (beat.kind === "workaround") {
-      if (!prior.some((entry) => ["failure", "block", "user_pushback", "capability_gap"].includes(entry.kind))) {
+      const priorFailures = prior
+        .filter((entry) => entry.kind === "failure" || entry.kind === "block")
+        .flatMap((entry) => entry.evidence)
+        .filter((event) => hasToolOutcome(event, ["failure", "blocked"]));
+      if (priorFailures.length === 0) {
         return "workaround-without-prior-problem";
       }
-      const earlierAttempts = prior
-        .filter((entry) => entry.kind === "attempt")
-        .flatMap((entry) => entry.evidence.filter((event) => event.kind === "tool_call"));
       const workaroundCalls = beat.evidence.filter((event) => event.kind === "tool_call");
-      if (earlierAttempts.length > 0 && workaroundCalls.length > 0) {
-        const priorSignatures = new Set(earlierAttempts.map(toolSignature));
-        if (workaroundCalls.every((event) => priorSignatures.has(toolSignature(event)))) {
-          return "workaround-repeats-attempt";
+      if (workaroundCalls.length === 0) return "workaround-without-tool-action";
+      const failedCallIds = new Set(priorFailures.map((event) => event.callId).filter((callId): callId is string => !!callId));
+      for (const call of workaroundCalls) {
+        if (!call.followupOfCallId || !failedCallIds.has(call.followupOfCallId)) {
+          return "workaround-not-linked-to-prior-failure";
+        }
+        if (call.followupRelation === "same_arguments_retry") return "workaround-same-argument-retry";
+        if (call.followupRelation === "same_tool_arguments_unknown") return "workaround-arguments-unknown";
+        if (call.followupRelation !== "alternative_action" && call.followupRelation !== "variant_arguments_retry") {
+          return "workaround-unverified-followup";
         }
       }
     }

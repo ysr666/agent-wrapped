@@ -102,8 +102,10 @@ function minedFailureWorkaround(windowId = "window:0") {
 }
 
 function firstWindowId(evidence) {
-  assert.ok(evidence.windows[0], "expected at least one story window");
-  return evidence.windows[0].id;
+  const storyWindow = evidence.windows.find((window) =>
+    ["event:e2", "event:e3", "event:e5", "event:e6"].every((id) => window.eventIds.includes(id)));
+  assert.ok(storyWindow ?? evidence.windows[0], "expected at least one story window");
+  return (storyWindow ?? evidence.windows[0]).id;
 }
 
 test("P8 v2 story evidence is event-first and does not require a P3 Moment", () => {
@@ -184,10 +186,13 @@ test("local grounding refuses to stitch beats across separate story windows", ()
 test("local grounding requires semantic support for correction, success, and a real workaround", () => {
   const evidence = buildSemanticEvidenceFromMoments(session(), []);
   const windowId = firstWindowId(evidence);
+  const correctionWindowId = evidence.windows.find((window) =>
+    window.eventIds.includes("event:e1") && window.eventIds.includes("event:e4"))?.id;
+  assert.ok(correctionWindowId);
 
   const fakeCorrection = parseStoryMinerOutput(JSON.stringify({
     stories: [{
-      windowId,
+      windowId: correctionWindowId,
       arcKind: "mistake_then_correction",
       beats: [
         { kind: "setup", evidenceIds: ["event:e1"] },
@@ -204,13 +209,13 @@ test("local grounding requires semantic support for correction, success, and a r
   const repeatedAttemptEvidence = {
     ...evidence,
     events: evidence.events.map((event) => event.id === "event:e5"
-      ? { ...event, toolName: "delete", text: evidence.events.find((entry) => entry.id === "event:e2")?.text }
+      ? { ...event, toolName: "delete", followupOfCallId: "call:0", followupRelation: "same_arguments_retry" }
       : event),
   };
   const repeatedAttempt = parseStoryMinerOutput(minedFailureWorkaround(windowId));
   assert.equal(
     validateStoryCandidates(repeatedAttempt.candidates, repeatedAttemptEvidence).rejected[0].reason,
-    "workaround-repeats-attempt",
+    "workaround-same-argument-retry",
   );
 
   const fakeSuccessEvidence = {
@@ -311,6 +316,71 @@ test("remote semantic evidence excludes raw tool payload sentinels", () => {
   assert.equal(localEvents[1].text, privatePayload);
 });
 
+test("local episode projection distinguishes exact retries without exporting arguments", () => {
+  const privateArgument = "SOURCE_SENTINEL --token RESULT_SENTINEL";
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "retry-projection",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "call-1", host: "dsh", actor: "tool", kind: "tool_call", order: 0, callId: "raw-1", toolName: "bash", toolArguments: privateArgument },
+      { id: "result-1", host: "dsh", actor: "tool", kind: "tool_result", order: 1, callId: "raw-1", isError: false, text: "exit code 1; tests failed" },
+      { id: "call-2", host: "dsh", actor: "tool", kind: "tool_call", order: 2, callId: "raw-2", toolName: "bash", toolArguments: privateArgument },
+      { id: "result-2", host: "dsh", actor: "tool", kind: "tool_result", order: 3, callId: "raw-2", isError: false, text: "exit code 1; tests failed" },
+      { id: "call-3", host: "dsh", actor: "tool", kind: "tool_call", order: 4, callId: "raw-3", toolName: "bash", toolArguments: "npm test -- --runInBand" },
+      { id: "result-3", host: "dsh", actor: "tool", kind: "tool_result", order: 5, callId: "raw-3", isError: false, text: "exit code 0; all tests passed" },
+    ],
+  }, [], { coverageWindows: 0, maxWindows: 4, maxEvents: 20 });
+  const byId = new Map(evidence.events.map((event) => [event.id, event]));
+  const sameRetry = byId.get("event:call-2");
+  const variantRetry = byId.get("event:call-3");
+  assert.equal(sameRetry?.followupOfCallId, "call:0");
+  assert.equal(sameRetry?.followupRelation, "same_arguments_retry");
+  assert.equal(variantRetry?.followupOfCallId, "call:1");
+  assert.equal(variantRetry?.followupRelation, "variant_arguments_retry");
+  assert.equal(byId.get("event:result-3")?.toolOperation, "test");
+  assert.equal(byId.get("event:result-3")?.outcome, "success");
+  assert.ok(evidence.windows.some((window) =>
+    window.reasons.includes("failure-followup-episode") &&
+    window.eventIds.includes("event:result-2") &&
+    window.eventIds.includes("event:call-3")));
+
+  const retryWindow = evidence.windows.find((window) =>
+    window.eventIds.includes("event:result-1") && window.eventIds.includes("event:call-2"));
+  assert.ok(retryWindow);
+  assert.equal(validateStoryCandidates([{
+    windowId: retryWindow.id,
+    arcKind: "failure_then_workaround",
+    confidence: "medium",
+    // Omitting attempt must not let an exact retry masquerade as a workaround.
+    beats: [
+      { kind: "failure", evidenceIds: ["event:result-1"] },
+      { kind: "workaround", evidenceIds: ["event:call-2"] },
+    ],
+  }], evidence).rejected[0].reason, "workaround-same-argument-retry");
+
+  const variantWindow = evidence.windows.find((window) =>
+    window.eventIds.includes("event:result-2") && window.eventIds.includes("event:call-3"));
+  assert.ok(variantWindow);
+  assert.equal(validateStoryCandidates([{
+    windowId: variantWindow.id,
+    arcKind: "failure_then_workaround",
+    confidence: "medium",
+    beats: [
+      { kind: "failure", evidenceIds: ["event:result-2"] },
+      { kind: "workaround", evidenceIds: ["event:call-3"] },
+      { kind: "success", evidenceIds: ["event:result-3"] },
+    ],
+  }], evidence).stories.length, 1);
+
+  const remote = JSON.stringify(evidence);
+  assert.ok(!remote.includes("SOURCE_SENTINEL"));
+  assert.ok(!remote.includes("RESULT_SENTINEL"));
+  assert.ok(!remote.includes("raw-1"));
+});
+
 test("local tool outcome classifier is conservative and supports DSH-shaped failures", () => {
   const result = (toolName, text, isError = false) => classifyToolOutcome({
     id: `event:${toolName}`, host: "dsh", actor: "tool", kind: isError ? "tool_error" : "tool_result", order: 0, toolName, text, isError,
@@ -337,10 +407,10 @@ test("grounding accepts only classified tool success and assertion claims", () =
     events: [
       { id: "event:claim", order: 0, actor: "assistant", kind: "assistant_text", text: "我先看看目录。" },
       { id: "event:correction", order: 1, actor: "assistant", kind: "assistant_text", text: "等等，我看错了。" },
-      { id: "event:failure", order: 2, actor: "tool", kind: "tool_result", toolName: "test", toolCategory: "test", outcome: "failure", exitCode: 1 },
+      { id: "event:failure", order: 2, actor: "tool", kind: "tool_result", toolName: "test", toolCategory: "test", outcome: "failure", exitCode: 1, callId: "call:0" },
       { id: "event:observation", order: 3, actor: "tool", kind: "tool_result", toolName: "read", toolCategory: "observation", outcome: "observation" },
       { id: "event:unknown", order: 4, actor: "tool", kind: "tool_result", toolName: "tool", toolCategory: "other", outcome: "unknown" },
-      { id: "event:workaround", order: 5, actor: "tool", kind: "tool_call", toolName: "write", toolCategory: "mutation" },
+      { id: "event:workaround", order: 5, actor: "tool", kind: "tool_call", toolName: "write", toolCategory: "mutation", followupOfCallId: "call:0", followupRelation: "alternative_action" },
       { id: "event:success", order: 6, actor: "tool", kind: "tool_result", toolName: "write", toolCategory: "mutation", outcome: "success", exitCode: 0 },
     ],
     windows: [{ id: "window:0", eventIds: ["event:claim", "event:correction", "event:failure", "event:observation", "event:unknown", "event:workaround", "event:success"], reasons: [] }],
@@ -370,8 +440,8 @@ test("overlapping windows cannot emit duplicate canonical Stories", () => {
     redactionCount: 0,
     truncated: false,
     events: [
-      { id: "event:failure", order: 0, actor: "tool", kind: "tool_result", toolName: "test", outcome: "failure" },
-      { id: "event:workaround", order: 1, actor: "tool", kind: "tool_call", toolName: "write" },
+      { id: "event:failure", order: 0, actor: "tool", kind: "tool_result", toolName: "test", outcome: "failure", callId: "call:0" },
+      { id: "event:workaround", order: 1, actor: "tool", kind: "tool_call", toolName: "write", followupOfCallId: "call:0", followupRelation: "alternative_action" },
     ],
     windows: [
       { id: "window:A", eventIds: ["event:failure", "event:workaround"], reasons: [] },
@@ -475,8 +545,9 @@ test("narrator cannot invent story ids and persona labels are forced to be sessi
 });
 
 test("generateSemanticStoryPersona performs miner then narrator, with local validation between calls", async () => {
+  const expectedWindowId = firstWindowId(buildSemanticEvidenceFromMoments(session(), []));
   const outputs = [
-    minedFailureWorkaround("window:0"),
+    minedFailureWorkaround(expectedWindowId),
     JSON.stringify({
       storyCards: [{ storyId: "story:0", title: "删不掉？那就换个办法", commentary: "权限只挡住了第一条路。" }],
       persona: { label: "本场表现像执着型实习生", tagline: "被拦住后继续换路。" },
@@ -493,9 +564,19 @@ test("generateSemanticStoryPersona performs miner then narrator, with local vali
   assert.equal(requests.length, 2);
   assert.equal(report.version, 2);
   assert.equal(report.stories.length, 1);
-  assert.equal(report.stories[0].windowId, "window:0");
+  assert.equal(report.stories[0].windowId, expectedWindowId);
   assert.equal(report.narration.storyCards[0].storyId, "story:0");
   assert.ok(report.personaSignals.some((signal) => signal.key === "persistence"));
+});
+
+test("verified structure survives an unavailable editorial narration call", async () => {
+  const expectedWindowId = firstWindowId(buildSemanticEvidenceFromMoments(session(), []));
+  const outputs = [minedFailureWorkaround(expectedWindowId), "not json"];
+  const narrator = { async generate() { return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(session(), narrator);
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.narration, undefined);
+  assert.equal(report.narrationUnavailable, true);
 });
 
 test("OpenAI-compatible narrator is opt-in and sends only the supplied prompt", async () => {

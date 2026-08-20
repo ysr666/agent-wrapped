@@ -3,7 +3,11 @@ import type { RankedMoment } from "../moments/types.js";
 import { sessionEventsFromMessages } from "../session-events/fromMessages.js";
 import type { SessionEvent } from "../session-events/types.js";
 import { createWrappedReport } from "../wrapped/wrappedReport.js";
-import { classifyToolOutcome } from "./toolOutcome.js";
+import {
+  classifySessionToolEvents,
+  classifyToolOutcome,
+  type ClassifiedSessionToolEvent,
+} from "./toolOutcome.js";
 import type {
   SemanticEvidenceBundle,
   SemanticEvidenceEvent,
@@ -30,11 +34,24 @@ export interface SemanticEvidenceOptions {
 }
 
 interface WindowCandidate {
-  start: number;
-  end: number;
+  eventIndexes: number[];
   score: number;
   reasons: string[];
   coverage: boolean;
+}
+
+function orderedUniqueIndexes(indexes: number[]): number[] {
+  return [...new Set(indexes)].sort((left, right) => left - right);
+}
+
+function contiguousIndexes(start: number, end: number): number[] {
+  const indexes: number[] = [];
+  for (let index = start; index <= end; index += 1) indexes.push(index);
+  return indexes;
+}
+
+function firstEventIndex(candidate: WindowCandidate): number {
+  return candidate.eventIndexes[0] ?? Number.POSITIVE_INFINITY;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -90,11 +107,15 @@ function certaintyCue(text: string | undefined): boolean {
   return /(?:修好了|解决了|找到根因|问题.*明确|可以结束|没问题了|fixed|solved|root cause|done|all good)/iu.test(text);
 }
 
-function eventSignal(event: SessionEvent, toolNames: Map<string, string>): { score: number; reasons: string[] } {
+function eventSignal(
+  event: SessionEvent,
+  toolNames: Map<string, string>,
+  toolFacts: Map<string, ClassifiedSessionToolEvent>,
+): { score: number; reasons: string[] } {
   let score = 0;
   const reasons: string[] = [];
   const resolvedToolName = event.toolName ?? (event.callId ? toolNames.get(event.callId) : undefined);
-  const toolOutcome = classifyToolOutcome(event, resolvedToolName).outcome;
+  const toolOutcome = toolFacts.get(event.id)?.outcome ?? classifyToolOutcome(event, resolvedToolName).outcome;
   if (toolOutcome === "failure" || toolOutcome === "blocked") {
     score += 9;
     reasons.push(toolOutcome === "blocked" ? "tool-blocked" : "tool-failure");
@@ -125,9 +146,59 @@ function eventSignal(event: SessionEvent, toolNames: Map<string, string>): { sco
 }
 
 function overlapRatio(left: WindowCandidate, right: WindowCandidate): number {
-  const overlap = Math.max(0, Math.min(left.end, right.end) - Math.max(left.start, right.start) + 1);
-  const shorter = Math.min(left.end - left.start + 1, right.end - right.start + 1);
+  const rightIndexes = new Set(right.eventIndexes);
+  const overlap = left.eventIndexes.filter((index) => rightIndexes.has(index)).length;
+  const shorter = Math.min(left.eventIndexes.length, right.eventIndexes.length);
   return shorter === 0 ? 0 : overlap / shorter;
+}
+
+function episodeCandidates(
+  events: SessionEvent[],
+  toolFacts: Map<string, ClassifiedSessionToolEvent>,
+): WindowCandidate[] {
+  const callIndexes = new Map<string, number>();
+  const resultIndexes = new Map<string, number>();
+  for (const [index, event] of events.entries()) {
+    if (event.kind === "tool_call" && event.callId) callIndexes.set(event.callId, index);
+    if ((event.kind === "tool_result" || event.kind === "tool_error") && event.callId) resultIndexes.set(event.callId, index);
+  }
+
+  const candidates: WindowCandidate[] = [];
+  for (const [followupIndex, event] of events.entries()) {
+    if (event.kind !== "tool_call") continue;
+    const facts = toolFacts.get(event.id);
+    if (
+      !facts?.followupOfCallId ||
+      !facts.followupRelation ||
+      !["alternative_action", "variant_arguments_retry"].includes(facts.followupRelation)
+    ) continue;
+    const failedCallIndex = callIndexes.get(facts.followupOfCallId);
+    const failedResultIndex = resultIndexes.get(facts.followupOfCallId);
+    if (failedCallIndex === undefined || failedResultIndex === undefined) continue;
+    const failedFacts = toolFacts.get(events[failedResultIndex]?.id ?? "");
+    if (failedFacts?.outcome !== "failure" && failedFacts?.outcome !== "blocked") continue;
+
+    const contextIndexes = events
+      .slice(failedResultIndex + 1, followupIndex)
+      .map((between, offset) => ({ event: between, index: failedResultIndex + 1 + offset }))
+      .filter(({ event: between }) => between.kind === "assistant_text" || between.kind === "user_message")
+      .slice(-3)
+      .map(({ index }) => index);
+    const followupResultIndex = event.callId ? resultIndexes.get(event.callId) : undefined;
+    candidates.push({
+      eventIndexes: orderedUniqueIndexes([
+        failedCallIndex,
+        failedResultIndex,
+        ...contextIndexes,
+        followupIndex,
+        ...(followupResultIndex === undefined ? [] : [followupResultIndex]),
+      ]),
+      score: facts.followupRelation === "alternative_action" ? 14 : 13,
+      reasons: ["failure-followup-episode", `followup:${facts.followupRelation}`],
+      coverage: false,
+    });
+  }
+  return candidates;
 }
 
 function selectWindows(
@@ -135,6 +206,7 @@ function selectWindows(
   momentMessageIndexes: Set<number>,
   options: SemanticEvidenceOptions,
   toolNames: Map<string, string>,
+  toolFacts: Map<string, ClassifiedSessionToolEvent>,
 ): WindowCandidate[] {
   if (events.length === 0) return [];
   const radius = clampInt(options.eventRadius, 3, 1, 8);
@@ -143,12 +215,11 @@ function selectWindows(
   const candidates: WindowCandidate[] = [];
 
   events.forEach((event, index) => {
-    const signal = eventSignal(event, toolNames);
+    const signal = eventSignal(event, toolNames, toolFacts);
     const momentBoost = event.messageIndex !== undefined && momentMessageIndexes.has(event.messageIndex) ? 3 : 0;
     if (signal.score + momentBoost <= 0) return;
     candidates.push({
-      start: Math.max(0, index - radius),
-      end: Math.min(events.length - 1, index + radius),
+      eventIndexes: contiguousIndexes(Math.max(0, index - radius), Math.min(events.length - 1, index + radius)),
       score: signal.score + momentBoost,
       reasons: [...signal.reasons, ...(momentBoost > 0 ? ["moment-hint"] : [])],
       coverage: false,
@@ -159,8 +230,7 @@ function selectWindows(
   for (let index = 0; index < coverageWindows; index += 1) {
     const center = Math.round(((index + 1) * (events.length - 1)) / (coverageWindows + 1));
     coverage.push({
-      start: Math.max(0, center - radius),
-      end: Math.min(events.length - 1, center + radius),
+      eventIndexes: contiguousIndexes(Math.max(0, center - radius), Math.min(events.length - 1, center + radius)),
       score: 0.25,
       reasons: ["coverage-sample"],
       coverage: true,
@@ -168,7 +238,8 @@ function selectWindows(
   }
 
   const selected: WindowCandidate[] = [];
-  for (const candidate of [...candidates].sort((a, b) => b.score - a.score || a.start - b.start)) {
+  const episodeWindows = episodeCandidates(events, toolFacts);
+  for (const candidate of [...episodeWindows, ...candidates].sort((a, b) => b.score - a.score || firstEventIndex(a) - firstEventIndex(b))) {
     if (selected.length >= Math.max(0, maxWindows - coverage.length)) break;
     if (selected.some((existing) => overlapRatio(existing, candidate) >= 0.7)) continue;
     selected.push(candidate);
@@ -178,8 +249,15 @@ function selectWindows(
     if (selected.some((existing) => overlapRatio(existing, candidate) >= 0.85)) continue;
     selected.push(candidate);
   }
-  if (selected.length === 0) selected.push({ start: 0, end: Math.min(events.length - 1, radius * 2), score: 0, reasons: ["fallback-window"], coverage: true });
-  return selected.sort((a, b) => a.start - b.start || b.score - a.score);
+  if (selected.length === 0) {
+    selected.push({
+      eventIndexes: contiguousIndexes(0, Math.min(events.length - 1, radius * 2)),
+      score: 0,
+      reasons: ["fallback-window"],
+      coverage: true,
+    });
+  }
+  return selected.sort((a, b) => firstEventIndex(a) - firstEventIndex(b) || b.score - a.score);
 }
 
 function rankedMomentOrder(left: RankedMoment, right: RankedMoment): number {
@@ -242,10 +320,11 @@ export function buildSemanticEvidenceFromMoments(
     if (event.kind === "tool_call" && event.callId && event.toolName) toolNames.set(event.callId, event.toolName);
     if (event.callId && !remoteCallIds.has(event.callId)) remoteCallIds.set(event.callId, `call:${remoteCallIds.size}`);
   }
+  const toolFacts = classifySessionToolEvents(events);
   const preliminaryHints = momentHints(rankedMoments, events, new Set(events.map((event) => event.id)), options);
-  const windows = selectWindows(events, preliminaryHints.messageIndexes, options, toolNames);
+  const windows = selectWindows(events, preliminaryHints.messageIndexes, options, toolNames, toolFacts);
   const desiredIndexes = new Set<number>();
-  for (const window of windows) for (let index = window.start; index <= window.end; index += 1) desiredIndexes.add(index);
+  for (const window of windows) for (const index of window.eventIndexes) desiredIndexes.add(index);
 
   const maxEvents = clampInt(options.maxEvents, 48, 4, 120);
   const maxEventChars = clampInt(options.maxEventChars, 1000, 120, 5000);
@@ -261,8 +340,8 @@ export function buildSemanticEvidenceFromMoments(
     const event = events[eventIndex];
     if (!event) continue;
     const resolvedToolName = event.toolName ?? (event.callId ? toolNames.get(event.callId) : undefined);
-    const toolSummary = event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error"
-      ? classifyToolOutcome(event, resolvedToolName)
+    const toolSummary: ClassifiedSessionToolEvent | undefined = event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error"
+      ? toolFacts.get(event.id) ?? classifyToolOutcome(event, resolvedToolName)
       : undefined;
     const rawText = eventText(event);
     let text: string | undefined;
@@ -288,10 +367,13 @@ export function buildSemanticEvidenceFromMoments(
       text,
       toolName: resolvedToolName,
       toolCategory: toolSummary?.toolCategory,
+      toolOperation: toolSummary?.operation,
       // Call IDs are useful for local pairing but host-provided values are not
       // trusted as remote-safe identifiers. Preserve the relationship with an
       // opaque per-evidence alias instead.
       callId: event.callId ? remoteCallIds.get(event.callId) : undefined,
+      followupOfCallId: toolSummary?.followupOfCallId ? remoteCallIds.get(toolSummary.followupOfCallId) : undefined,
+      followupRelation: toolSummary?.followupRelation,
       isError: event.isError,
       outcome: toolSummary?.outcome ?? event.outcome,
       exitCode: toolSummary?.exitCode,
@@ -304,7 +386,8 @@ export function buildSemanticEvidenceFromMoments(
   const eventIdSet = new Set(evidenceEvents.map((event) => event.id));
   const semanticWindows: SemanticStoryWindow[] = windows.map((window, index) => ({
     id: `window:${index}`,
-    eventIds: events.slice(window.start, window.end + 1).map((event) => `event:${event.id}`).filter((id) => eventIdSet.has(id)),
+    eventIds: window.eventIndexes.map((eventIndex) => events[eventIndex]).filter((event): event is SessionEvent => !!event)
+      .map((event) => `event:${event.id}`).filter((id) => eventIdSet.has(id)),
     reasons: [...new Set(window.reasons)],
   })).filter((window) => window.eventIds.length >= 2);
 

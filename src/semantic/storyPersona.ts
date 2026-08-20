@@ -137,8 +137,17 @@ export async function generateSemanticStoryPersona(
     };
   }
 
-  const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, validation.stories, personaSignals));
-  const narration = parseNarrationOutput(narrationRaw, validation.stories, personaSignals, evidence.locale);
+  let narration: SemanticNarration | undefined;
+  let narrationUnavailable = false;
+  try {
+    const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, validation.stories, personaSignals));
+    narration = parseNarrationOutput(narrationRaw, validation.stories, personaSignals, evidence.locale);
+  } catch {
+    // Narration is editorial only. Preserve the already verified local facts
+    // rather than dropping a session because a remote prose call failed or
+    // returned malformed JSON. Deliberately do not retain remote error text.
+    narrationUnavailable = true;
+  }
   const evidenceUsed = [
     ...validation.stories.flatMap((story) => story.evidenceIds),
     ...personaSignals.flatMap((signal) => signal.evidenceIds),
@@ -153,6 +162,7 @@ export async function generateSemanticStoryPersona(
       stories: validation.stories,
       personaSignals,
       narration,
+      ...(narrationUnavailable ? { narrationUnavailable: true } : {}),
       insufficientEvidence: validation.rejected.length > 0 && validation.stories.length === 0
         ? mining.insufficientEvidence
         : undefined,
