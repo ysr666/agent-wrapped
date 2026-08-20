@@ -20,28 +20,86 @@ function level(count: number): SemanticPersonaSignal["level"] {
   return "low";
 }
 
-function storyEvidence(stories: VerifiedStoryArc[], kinds: VerifiedStoryArc["arcKind"][]): string[] {
-  return stories.filter((story) => kinds.includes(story.arcKind)).flatMap((story) => story.evidenceIds);
-}
-
-function momentEvidence(bundle: SemanticEvidenceBundle, types: SemanticEvidenceBundle["momentHints"][number]["type"][]): string[] {
-  return bundle.momentHints.filter((moment) => types.includes(moment.type)).map((moment) => moment.id);
-}
-
 function unique(values: string[]): string[] {
   return values.filter((value, index, all) => all.indexOf(value) === index);
 }
 
+interface PersonaEvidenceUnit {
+  episodeKeys: string[];
+  eventIds: string[];
+  outputEvidenceIds: string[];
+}
+
+function storyUnit(story: VerifiedStoryArc): PersonaEvidenceUnit {
+  return {
+    episodeKeys: [`window:${story.windowId}`],
+    eventIds: [...story.evidenceIds],
+    outputEvidenceIds: [...story.evidenceIds],
+  };
+}
+
+function momentUnit(
+  moment: SemanticEvidenceBundle["momentHints"][number],
+  bundle: SemanticEvidenceBundle,
+): PersonaEvidenceUnit {
+  const eventSet = new Set(moment.eventIds);
+  const episodeKeys = bundle.windows
+    .filter((window) => window.eventIds.some((id) => eventSet.has(id)))
+    .map((window) => `window:${window.id}`);
+  return {
+    episodeKeys: episodeKeys.length > 0 ? episodeKeys : [`moment:${moment.id}`],
+    eventIds: [...moment.eventIds],
+    outputEvidenceIds: unique([moment.id, ...moment.eventIds]),
+  };
+}
+
+function overlaps(left: PersonaEvidenceUnit, right: PersonaEvidenceUnit): boolean {
+  const rightEpisodes = new Set(right.episodeKeys);
+  if (left.episodeKeys.some((key) => rightEpisodes.has(key))) return true;
+  const rightEvents = new Set(right.eventIds);
+  return left.eventIds.some((id) => rightEvents.has(id));
+}
+
+function episodeComponents(units: PersonaEvidenceUnit[]): PersonaEvidenceUnit[][] {
+  const remaining = new Set(units.map((_unit, index) => index));
+  const components: PersonaEvidenceUnit[][] = [];
+
+  while (remaining.size > 0) {
+    const seed = remaining.values().next().value as number;
+    remaining.delete(seed);
+    const queue = [seed];
+    const component: PersonaEvidenceUnit[] = [];
+    while (queue.length > 0) {
+      const currentIndex = queue.shift() as number;
+      const current = units[currentIndex];
+      component.push(current);
+      for (const candidateIndex of [...remaining]) {
+        if (component.some((member) => overlaps(member, units[candidateIndex])) || overlaps(current, units[candidateIndex])) {
+          remaining.delete(candidateIndex);
+          queue.push(candidateIndex);
+        }
+      }
+    }
+    components.push(component);
+  }
+
+  return components;
+}
+
 /**
- * Persona is aggregated from observed structures. No language model decides the
- * numeric magnitude, and we intentionally expose coarse low/medium/high levels
- * instead of fake 0-100 precision.
+ * Persona magnitude counts underlying local episodes, not every representation
+ * of them. If one false dawn is present as both a verified Story and a P3 Moment,
+ * it contributes one episode instead of being double-counted into a higher level.
  */
 export function aggregatePersonaSignals(
   stories: VerifiedStoryArc[],
   bundle: SemanticEvidenceBundle,
 ): SemanticPersonaSignal[] {
-  const specs: Array<{ key: PersonaSignalKey; storyKinds: VerifiedStoryArc["arcKind"][]; momentTypes: SemanticEvidenceBundle["momentHints"][number]["type"][] }> = [
+  const specs: Array<{
+    key: PersonaSignalKey;
+    storyKinds: VerifiedStoryArc["arcKind"][];
+    momentTypes: SemanticEvidenceBundle["momentHints"][number]["type"][];
+  }> = [
     {
       key: "dramaticity",
       storyKinds: ["false_dawn", "mistake_then_correction", "breakdown_then_resume", "reversal"],
@@ -75,19 +133,21 @@ export function aggregatePersonaSignals(
   ];
 
   return specs.flatMap((spec) => {
-    const storyMatches = stories.filter((story) => spec.storyKinds.includes(story.arcKind));
-    const momentMatches = bundle.momentHints.filter((moment) => spec.momentTypes.includes(moment.type));
-    const count = storyMatches.length + momentMatches.length;
-    if (count === 0) return [];
+    const units: PersonaEvidenceUnit[] = [
+      ...stories.filter((story) => spec.storyKinds.includes(story.arcKind)).map(storyUnit),
+      ...bundle.momentHints.filter((moment) => spec.momentTypes.includes(moment.type)).map((moment) => momentUnit(moment, bundle)),
+    ];
+    if (units.length === 0) return [];
+
+    const components = episodeComponents(units);
+    const evidenceIds = unique(components.flatMap((component) => component.flatMap((unit) => unit.outputEvidenceIds)));
+    const count = components.length;
     return [{
       key: spec.key,
       label: LABELS[spec.key],
       count,
       level: level(count),
-      evidenceIds: unique([
-        ...storyEvidence(stories, spec.storyKinds),
-        ...momentEvidence(bundle, spec.momentTypes),
-      ]),
+      evidenceIds,
     }];
   });
 }
