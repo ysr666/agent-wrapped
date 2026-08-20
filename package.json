@@ -26,7 +26,9 @@
     "test:review": "npm run build && node --test test/reviewRunner.test.mjs test/cli.test.mjs",
     "test:moments": "npm run build && node --test test/momentBuilder.test.mjs test/momentRanker.test.mjs test/awardComposer.test.mjs test/wrappedReport.test.mjs",
     "test:p5-p6": "npm run build && node --test test/dshIngest.test.mjs test/evaluationBenchmark.test.mjs",
-    "test:p7": "npm run build && node --test test/reviewRunner.test.mjs test/cli.test.mjs"
+    "test:p7": "npm run build && node --test test/reviewRunner.test.mjs test/cli.test.mjs",
+    "test:p8": "npm run build && node --test test/semanticStory.test.mjs",
+    "story:latest": "npm run build && node examples/semantic-story.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
