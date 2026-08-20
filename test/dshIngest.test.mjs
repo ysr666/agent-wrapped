@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as zlib from "node:zlib";
@@ -8,17 +9,18 @@ import * as zlib from "node:zlib";
 import { parseDshSessionJsonl } from "../dist/ingest/dsh.js";
 import {
   discoverDshSessionFiles,
+  loadDshSessions,
   readDshSessionFile,
   resolveDshSessionsRoot,
 } from "../dist/ingest/dshFilesystem.js";
 
 /** Mirrors the current DSH SessionEventMap shape from @deepseek-ai/dsh-session. */
-function dshJsonl() {
+function dshJsonl(sessionId = "session-123") {
   return [
     JSON.stringify({
       type: "session",
       version: 0,
-      id: "session-123",
+      id: sessionId,
       createdAt: 1784973850091,
       cwd: "/work/project",
     }),
@@ -207,4 +209,21 @@ test("P5 discovers plaintext and default DSH zstd session files newest-first", a
   assert.equal(session.id, "session-123");
   assert.equal(session.source.encoding, "jsonl-zstd");
   assert.ok(session.messages.some((message) => message.text.includes("路线完全错了")));
+});
+
+test("P5 can reproduce a local fixed review subset from session-id hashes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-wrapped-dsh-hash-"));
+  const selectedId = "session-selected";
+  try {
+    await mkdir(join(root, "selected"), { recursive: true });
+    await mkdir(join(root, "other"), { recursive: true });
+    await writeFile(join(root, "selected", "session.jsonl"), dshJsonl(selectedId));
+    await writeFile(join(root, "other", "session.jsonl"), dshJsonl("session-other"));
+
+    const selectedHash = createHash("sha256").update(selectedId).digest("hex").slice(0, 12);
+    const sessions = await loadDshSessions({ root, maxSessions: 10, sessionIdHashes: [selectedHash] });
+    assert.deepEqual(sessions.map((session) => session.id), [selectedId]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -68,6 +68,7 @@ export async function refreshLocalDshReviewWorkspace(
       host: "dsh",
       root: options.ingest?.root,
       maxSessions,
+      sessionIdHashes: options.ingest?.sessionIdHashes,
     },
     previous,
     { presentationLocale: options.reviewLocale },

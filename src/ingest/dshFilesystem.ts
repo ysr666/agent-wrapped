@@ -1,4 +1,5 @@
 import { opendir, readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import * as zlib from "node:zlib";
@@ -18,6 +19,11 @@ export interface DshDiscoveryOptions {
 export interface LoadDshSessionsOptions extends DshDiscoveryOptions, Omit<ParseDshSessionOptions, "sourcePath" | "encoding"> {
   /** Skip malformed/unreadable session files instead of failing the whole batch. Defaults to true. */
   skipUnreadable?: boolean;
+  /**
+   * Local-only SHA-256 session-id prefixes used to reproduce a frozen calibration split.
+   * They are matched after ingestion and never leave this process or the local review workspace.
+   */
+  sessionIdHashes?: string[];
 }
 
 interface DshSessionFile {
@@ -207,14 +213,20 @@ export async function readDshSessionFile(
 /** Discover and ingest a newest-first batch of local DSH sessions. */
 export async function loadDshSessions(options: LoadDshSessionsOptions = {}): Promise<IngestedSession[]> {
   const paths = await discoverDshSessionFiles(options);
+  const requestedHashes = new Set(
+    (options.sessionIdHashes ?? []).map((hash) => hash.trim().toLowerCase()).filter(Boolean),
+  );
   const output: IngestedSession[] = [];
   const skipUnreadable = options.skipUnreadable ?? true;
 
   for (const path of paths) {
     try {
-      output.push(await readDshSessionFile(path, {
+      const session = await readDshSessionFile(path, {
         includeVisibleReasoning: options.includeVisibleReasoning,
-      }));
+      });
+      const sessionHash = createHash("sha256").update(session.id).digest("hex").slice(0, 12);
+      if (requestedHashes.size > 0 && !requestedHashes.has(sessionHash)) continue;
+      output.push(session);
     } catch (error) {
       if (!skipUnreadable) throw error;
     }

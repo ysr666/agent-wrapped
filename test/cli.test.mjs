@@ -151,3 +151,14 @@ test("P7 CLI rejects invalid numeric flags clearly", async () => {
   assert.equal(code, 1);
   assert.match(stderr.value(), /--latest must be a non-negative integer/u);
 });
+
+test("P7 CLI rejects malformed fixed-session hash selectors before ingestion", async () => {
+  const stdout = capture();
+  const stderr = capture();
+  const code = await runCli(["dsh", "--session-hashes", "not-a-hash"], {
+    stdout: stdout.output,
+    stderr: stderr.output,
+  });
+  assert.equal(code, 1);
+  assert.match(stderr.value(), /12-character lowercase SHA-256 prefixes/u);
+});

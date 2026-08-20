@@ -251,6 +251,17 @@ const refreshed = await refreshLocalDshReviewWorkspace({
 const calibration = calibrateReviewWorkspace(refreshed.workspace);
 ```
 
+For a frozen local calibration subset, pass SHA-256 prefixes of session IDs. The
+selector is local-only; the review workspace stores the prefixes, not original
+session artifacts:
+
+```bash
+agent-wrapped dsh --latest 200 \
+  --session-hashes 0123456789ab,abcdef012345 \
+  --pairs 3 \
+  --store ~/.agent-wrapped/review-calibration.json
+```
+
 P8 v2:
 
 ```ts

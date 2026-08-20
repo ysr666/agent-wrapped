@@ -85,6 +85,16 @@ function numberFlag(args: ParsedArgs, name: string, fallback: number): number {
   return numeric;
 }
 
+function sessionHashesFlag(args: ParsedArgs, name: string): string[] | undefined {
+  const value = stringFlag(args, name);
+  if (value === undefined) return undefined;
+  const hashes = [...new Set(value.split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean))];
+  if (hashes.length === 0 || hashes.some((entry) => !/^[a-f0-9]{12}$/u.test(entry))) {
+    throw new Error(`--${name} must be a comma-separated list of 12-character lowercase SHA-256 prefixes.`);
+  }
+  return hashes;
+}
+
 function parseLocale(value: string | undefined, fallback: PresentationLocale): PresentationLocale {
   const resolved = value ?? fallback;
   if (resolved === "zh-CN" || resolved === "en") return resolved;
@@ -114,6 +124,7 @@ DSH options:
   --root PATH       override DSH sessions root
   --top-moments N   P6 moments kept per session (default 8)
   --pairs N         pairwise review tasks per session (default 12)
+  --session-hashes H comma-separated local SHA-256 session-id prefixes for a frozen review subset
   --reasoning       include reasoning blocks only if the host surface exposed them
   --locale LOCALE   bind a new workspace to zh-CN (default) or en;
                     existing workspace locale is preserved when omitted
@@ -174,6 +185,7 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
   const pairs = numberFlag(args, "pairs", 12);
   const store = stringFlag(args, "store");
   const root = stringFlag(args, "root");
+  const sessionIdHashes = sessionHashesFlag(args, "session-hashes");
   const requestedReviewLocale = stringFlag(args, "locale");
   const reviewLocale = requestedReviewLocale === undefined
     ? undefined
@@ -184,6 +196,7 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
     ingest: {
       maxSessions: latest,
       root,
+      sessionIdHashes,
       includeVisibleReasoning: booleanFlag(args, "reasoning"),
     },
     evaluation: {
@@ -195,6 +208,7 @@ async function commandDsh(args: ParsedArgs, stdout: CliTextOutput): Promise<numb
   out(stdout, `P7 workspace 已更新：${refreshed.path}`);
   out(stdout, `评测协议：v${refreshed.workspace.protocolVersion} · ${refreshed.workspace.presentationLocale}`);
   out(stdout, `当前 ${refreshed.workspace.cases.length} 场；新增 ${refreshed.addedSessions} 场；保留人工评测 ${refreshed.preservedReviews} 场。`);
+  if (sessionIdHashes) out(stdout, `固定本地样本：${sessionIdHashes.length} 场（仅存 session-id 哈希前缀）。`);
   out(
     stdout,
     `解析：${refreshed.ingestion.sessionsWithAssistantMessages}/${refreshed.ingestion.discoveredSessions} 场含 assistant 文本，` +

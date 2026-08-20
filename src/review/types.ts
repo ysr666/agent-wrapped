@@ -5,6 +5,8 @@ export interface ReviewWorkspaceSource {
   host: "dsh";
   root?: string;
   maxSessions: number;
+  /** Local-only hashed IDs pin a review pack to a frozen calibration subset. */
+  sessionIdHashes?: string[];
 }
 
 /**
