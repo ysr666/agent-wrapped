@@ -40,6 +40,14 @@ interface WindowCandidate {
   coverage: boolean;
 }
 
+function isNarrativeTurnCandidate(candidate: WindowCandidate): boolean {
+  return candidate.reasons.some((reason) =>
+    reason === "user-pushback" ||
+    reason === "assistant-correction" ||
+    reason === "assistant-certainty"
+  );
+}
+
 function orderedUniqueIndexes(indexes: number[]): number[] {
   return [...new Set(indexes)].sort((left, right) => left - right);
 }
@@ -239,8 +247,26 @@ function selectWindows(
 
   const selected: WindowCandidate[] = [];
   const episodeWindows = episodeCandidates(events, toolFacts);
+  const signalBudget = Math.max(0, maxWindows - coverage.length);
+
+  // Failure→follow-up episodes are strong factual anchors, but they are not
+  // automatically entertaining. Preserve one slot for an explicit assertion,
+  // correction, or user pushback when the session has one; otherwise a long
+  // tool-heavy session can send only generic workflow loops to Story Miner.
+  // This is a selection/diversity rule, not a wider window or another keyword
+  // detector, and it leaves ordinary failure coverage intact.
+  if (signalBudget > 0) {
+    for (const candidate of candidates
+      .filter(isNarrativeTurnCandidate)
+      .sort((a, b) => b.score - a.score || firstEventIndex(a) - firstEventIndex(b))) {
+      if (selected.length >= 1) break;
+      if (selected.some((existing) => overlapRatio(existing, candidate) >= 0.7)) continue;
+      selected.push(candidate);
+    }
+  }
+
   for (const candidate of [...episodeWindows, ...candidates].sort((a, b) => b.score - a.score || firstEventIndex(a) - firstEventIndex(b))) {
-    if (selected.length >= Math.max(0, maxWindows - coverage.length)) break;
+    if (selected.length >= signalBudget) break;
     if (selected.some((existing) => overlapRatio(existing, candidate) >= 0.7)) continue;
     selected.push(candidate);
   }

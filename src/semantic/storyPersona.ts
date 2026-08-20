@@ -2,6 +2,7 @@ import type { IngestedSession } from "../ingest/types.js";
 import { buildSemanticEvidence, type SemanticEvidenceOptions } from "./evidence.js";
 import { aggregatePersonaSignals } from "./persona.js";
 import { buildNarrationPrompt, buildStoryMinerPrompt } from "./prompt.js";
+import { admitStoriesForWrapped } from "./storyAdmission.js";
 import { parseStoryMinerOutput, validateStoryCandidates } from "./storyMiner.js";
 import type {
   SemanticEvidenceBundle,
@@ -87,6 +88,21 @@ export function parseNarrationOutput(
 
 export interface GenerateSemanticStoryPersonaOptions extends SemanticEvidenceOptions {}
 
+function storyDiagnostics(
+  verifiedStoryCount: number,
+  suppressed: ReturnType<typeof admitStoriesForWrapped>["suppressed"],
+): NonNullable<SemanticStoryPersonaReport["diagnostics"]> {
+  const suppressionReasons: Record<string, number> = {};
+  for (const entry of suppressed) {
+    suppressionReasons[entry.reason] = (suppressionReasons[entry.reason] ?? 0) + 1;
+  }
+  return {
+    verifiedStoryCount,
+    suppressedStoryCount: suppressed.length,
+    suppressionReasons,
+  };
+}
+
 /**
  * P8 v2 pipeline:
  * event evidence -> Story Miner(structure only) -> local validation ->
@@ -102,7 +118,7 @@ export async function generateSemanticStoryPersona(
     return {
       evidence,
       report: {
-        version: 2,
+        version: 3,
         locale: evidence.locale,
         sessionId: evidence.sessionId,
         stories: [],
@@ -118,20 +134,31 @@ export async function generateSemanticStoryPersona(
   const miningRaw = await narrator.generate(buildStoryMinerPrompt(evidence));
   const mining = parseStoryMinerOutput(miningRaw);
   const validation = validateStoryCandidates(mining.candidates, evidence);
-  const personaSignals = aggregatePersonaSignals(validation.stories, evidence);
+  const admission = admitStoriesForWrapped(validation.stories, evidence);
+  const stories = admission.stories;
+  // A generic worklog trajectory must not create a personality card by itself.
+  // Persona only competes for presentation once an episode itself earned a
+  // showable Story slot.
+  const personaSignals = stories.length > 0 ? aggregatePersonaSignals(stories, evidence) : [];
+  const diagnostics = storyDiagnostics(validation.stories.length, admission.suppressed);
 
-  if (validation.stories.length === 0 && personaSignals.length === 0) {
+  if (stories.length === 0 && personaSignals.length === 0) {
     return {
       evidence,
       report: {
-        version: 2,
+        version: 3,
         locale: evidence.locale,
         sessionId: evidence.sessionId,
         stories: [],
         personaSignals: [],
-        insufficientEvidence: mining.insufficientEvidence ?? (evidence.locale === "zh-CN"
-          ? "Story Miner 没有找到能通过本地结构校验的剧情。"
-          : "Story Miner found no story that passed local structural validation."),
+        diagnostics,
+        insufficientEvidence: validation.stories.length > 0
+          ? (evidence.locale === "zh-CN"
+            ? "验证到的工具轨迹没有足够明确的反转、改口或人类可感知的戏剧张力，因此不上榜。"
+            : "Verified tool trajectories lacked a clear reversal, correction, or human-visible dramatic turn, so none made the highlight reel.")
+          : mining.insufficientEvidence ?? (evidence.locale === "zh-CN"
+            ? "Story Miner 没有找到能通过本地结构校验的剧情。"
+            : "Story Miner found no story that passed local structural validation."),
         evidenceUsed: [],
       },
     };
@@ -140,8 +167,8 @@ export async function generateSemanticStoryPersona(
   let narration: SemanticNarration | undefined;
   let narrationUnavailable = false;
   try {
-    const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, validation.stories, personaSignals));
-    narration = parseNarrationOutput(narrationRaw, validation.stories, personaSignals, evidence.locale);
+    const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, stories, personaSignals));
+    narration = parseNarrationOutput(narrationRaw, stories, personaSignals, evidence.locale);
   } catch {
     // Narration is editorial only. Preserve the already verified local facts
     // rather than dropping a session because a remote prose call failed or
@@ -149,21 +176,22 @@ export async function generateSemanticStoryPersona(
     narrationUnavailable = true;
   }
   const evidenceUsed = [
-    ...validation.stories.flatMap((story) => story.evidenceIds),
+    ...stories.flatMap((story) => story.evidenceIds),
     ...personaSignals.flatMap((signal) => signal.evidenceIds),
   ].filter((id, index, all) => all.indexOf(id) === index);
 
   return {
     evidence,
     report: {
-      version: 2,
+      version: 3,
       locale: evidence.locale,
       sessionId: evidence.sessionId,
-      stories: validation.stories,
+      stories,
       personaSignals,
       narration,
       ...(narrationUnavailable ? { narrationUnavailable: true } : {}),
-      insufficientEvidence: validation.rejected.length > 0 && validation.stories.length === 0
+      diagnostics,
+      insufficientEvidence: validation.rejected.length > 0 && stories.length === 0
         ? mining.insufficientEvidence
         : undefined,
       evidenceUsed,

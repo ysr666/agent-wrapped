@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   aggregatePersonaSignals,
+  admitStoriesForWrapped,
   buildNarrationPrompt,
   buildSemanticEvidenceFromMoments,
   buildStoryMinerPrompt,
@@ -101,11 +102,48 @@ function minedFailureWorkaround(windowId = "window:0") {
   });
 }
 
+function capabilityGapSession() {
+  const base = session();
+  return {
+    ...base,
+    messages: base.messages.map((message, index) => index === 2
+      ? { ...message, text: "我没有这个权限，我换个办法。" }
+      : message),
+    events: base.events.map((event) => event.id === "e4"
+      ? { ...event, text: "我没有这个权限，我换个办法。" }
+      : event),
+  };
+}
+
+function minedCapabilityGapWorkaround(windowId = "window:0") {
+  return JSON.stringify({
+    stories: [{
+      windowId,
+      arcKind: "capability_gap_then_improvisation",
+      beats: [
+        { kind: "block", evidenceIds: ["event:e3"] },
+        { kind: "capability_gap", evidenceIds: ["event:e4"] },
+        { kind: "workaround", evidenceIds: ["event:e5"] },
+        { kind: "success", evidenceIds: ["event:e6"] },
+      ],
+      confidence: "high",
+    }],
+    insufficientEvidence: null,
+  });
+}
+
 function firstWindowId(evidence) {
   const storyWindow = evidence.windows.find((window) =>
     ["event:e2", "event:e3", "event:e5", "event:e6"].every((id) => window.eventIds.includes(id)));
   assert.ok(storyWindow ?? evidence.windows[0], "expected at least one story window");
   return (storyWindow ?? evidence.windows[0]).id;
+}
+
+function capabilityWindowId(evidence) {
+  const storyWindow = evidence.windows.find((window) =>
+    ["event:e4", "event:e5", "event:e6"].every((id) => window.eventIds.includes(id)));
+  assert.ok(storyWindow, "expected a window covering the capability-gap episode");
+  return storyWindow.id;
 }
 
 test("P8 v2 story evidence is event-first and does not require a P3 Moment", () => {
@@ -118,6 +156,40 @@ test("P8 v2 story evidence is event-first and does not require a P3 Moment", () 
   assert.ok(evidence.windows.length > 0);
   assert.ok(evidence.events.some((event) => event.kind === "tool_error"));
   assert.ok(evidence.events.some((event) => event.toolName === "computer_use"));
+});
+
+test("window recall reserves a narrative turn beside repeated tool failure episodes", () => {
+  const events = [{
+    id: "correction",
+    host: "dsh",
+    actor: "assistant",
+    kind: "assistant_text",
+    order: 0,
+    text: "等等，不对，我刚才判断错了。",
+  }];
+  for (let index = 0; index < 4; index += 1) {
+    const order = 1 + index * 4;
+    events.push(
+      { id: `fail-call-${index}`, host: "dsh", actor: "tool", kind: "tool_call", order, callId: `fail-${index}`, toolName: "bash", toolArguments: `run-${index}` },
+      { id: `fail-result-${index}`, host: "dsh", actor: "tool", kind: "tool_result", order: order + 1, callId: `fail-${index}`, isError: false, text: "exit code 1; tests failed" },
+      { id: `followup-call-${index}`, host: "dsh", actor: "tool", kind: "tool_call", order: order + 2, callId: `followup-${index}`, toolName: "write", toolArguments: `alternate-${index}` },
+      { id: `followup-result-${index}`, host: "dsh", actor: "tool", kind: "tool_result", order: order + 3, callId: `followup-${index}`, isError: false, text: "deleted" },
+    );
+  }
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "narrative-reserve",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events,
+  }, [], { coverageWindows: 0, maxWindows: 4, eventRadius: 1, maxEvents: 30 });
+
+  assert.ok(evidence.windows.some((window) => window.eventIds.includes("event:correction")));
+  assert.equal(
+    evidence.windows.filter((window) => window.reasons.includes("failure-followup-episode")).length,
+    3,
+  );
 });
 
 test("P8 v2 keeps raw tool payloads local and sends only structural tool evidence", () => {
@@ -138,6 +210,7 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.match(miner.system, /职责只有一个/u);
   assert.match(miner.system, /windowId/u);
   assert.match(miner.system, /禁止把不同窗口/u);
+  assert.match(miner.system, /工作流水/u);
   assert.ok(miner.user.includes('"windowId"'));
   assert.ok(!miner.user.includes('"score":'));
 
@@ -544,10 +617,43 @@ test("narrator cannot invent story ids and persona labels are forced to be sessi
   assert.match(narration.persona.label, /^本场表现像/u);
 });
 
-test("generateSemanticStoryPersona performs miner then narrator, with local validation between calls", async () => {
+test("routine tool trajectories stay verified locally but do not become Wrapped story/persona cards", async () => {
   const expectedWindowId = firstWindowId(buildSemanticEvidenceFromMoments(session(), []));
+  const outputs = [minedFailureWorkaround(expectedWindowId)];
+  const requests = [];
+  const narrator = {
+    async generate(request) {
+      requests.push(request);
+      return outputs.shift();
+    },
+  };
+  const { report } = await generateSemanticStoryPersona(session(), narrator);
+  assert.equal(requests.length, 1, "routine trajectories must not spend a second call on commentary");
+  assert.equal(report.version, 3);
+  assert.equal(report.stories.length, 0);
+  assert.equal(report.personaSignals.length, 0);
+  assert.equal(report.diagnostics?.verifiedStoryCount, 1);
+  assert.equal(report.diagnostics?.suppressedStoryCount, 1);
+  assert.equal(report.diagnostics?.suppressionReasons["routine-tool-trajectory"], 1);
+  assert.match(report.insufficientEvidence, /不上榜/u);
+});
+
+test("admission keeps a grounded story with a human-visible capability turn", () => {
+  const evidence = buildSemanticEvidenceFromMoments(capabilityGapSession(), []);
+  const expectedWindowId = capabilityWindowId(evidence);
+  const stories = validateStoryCandidates(
+    parseStoryMinerOutput(minedCapabilityGapWorkaround(expectedWindowId)).candidates,
+    evidence,
+  ).stories;
+  const admission = admitStoriesForWrapped(stories, evidence);
+  assert.equal(admission.stories.length, 1);
+  assert.equal(admission.suppressed.length, 0);
+});
+
+test("generateSemanticStoryPersona performs miner then narrator only for a showable story", async () => {
+  const expectedWindowId = capabilityWindowId(buildSemanticEvidenceFromMoments(capabilityGapSession(), []));
   const outputs = [
-    minedFailureWorkaround(expectedWindowId),
+    minedCapabilityGapWorkaround(expectedWindowId),
     JSON.stringify({
       storyCards: [{ storyId: "story:0", title: "删不掉？那就换个办法", commentary: "权限只挡住了第一条路。" }],
       persona: { label: "本场表现像执着型实习生", tagline: "被拦住后继续换路。" },
@@ -560,20 +666,20 @@ test("generateSemanticStoryPersona performs miner then narrator, with local vali
       return outputs.shift();
     },
   };
-  const { report } = await generateSemanticStoryPersona(session(), narrator);
+  const { report } = await generateSemanticStoryPersona(capabilityGapSession(), narrator);
   assert.equal(requests.length, 2);
-  assert.equal(report.version, 2);
+  assert.equal(report.version, 3);
   assert.equal(report.stories.length, 1);
   assert.equal(report.stories[0].windowId, expectedWindowId);
   assert.equal(report.narration.storyCards[0].storyId, "story:0");
-  assert.ok(report.personaSignals.some((signal) => signal.key === "persistence"));
+  assert.ok(report.personaSignals.some((signal) => signal.key === "improvisation"));
 });
 
 test("verified structure survives an unavailable editorial narration call", async () => {
-  const expectedWindowId = firstWindowId(buildSemanticEvidenceFromMoments(session(), []));
-  const outputs = [minedFailureWorkaround(expectedWindowId), "not json"];
+  const expectedWindowId = capabilityWindowId(buildSemanticEvidenceFromMoments(capabilityGapSession(), []));
+  const outputs = [minedCapabilityGapWorkaround(expectedWindowId), "not json"];
   const narrator = { async generate() { return outputs.shift(); } };
-  const { report } = await generateSemanticStoryPersona(session(), narrator);
+  const { report } = await generateSemanticStoryPersona(capabilityGapSession(), narrator);
   assert.equal(report.stories.length, 1);
   assert.equal(report.narration, undefined);
   assert.equal(report.narrationUnavailable, true);

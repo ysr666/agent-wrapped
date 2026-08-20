@@ -152,7 +152,7 @@ export interface SemanticNarration {
 }
 
 export interface SemanticStoryPersonaReport {
-  version: 2;
+  version: 3;
   locale: AwardLocale;
   sessionId: string;
   stories: VerifiedStoryArc[];
@@ -160,6 +160,12 @@ export interface SemanticStoryPersonaReport {
   narration?: SemanticNarration;
   /** Editorial narration is optional; verified local structure remains usable if it is unavailable. */
   narrationUnavailable?: boolean;
+  /** Local-only diagnostics; suppressed stories were factually verified but not distinctive enough to become cards. */
+  diagnostics?: {
+    verifiedStoryCount: number;
+    suppressedStoryCount: number;
+    suppressionReasons: Record<string, number>;
+  };
   insufficientEvidence?: string;
   evidenceUsed: string[];
 }

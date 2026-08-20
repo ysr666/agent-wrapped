@@ -10,7 +10,7 @@ Instead of only counting tokens and tool calls, Agent Wrapped looks for the part
 - 🐺 **Called-it-too-early moments** — repeated declarations that the root cause was found
 - 🧠 **Plot twists** — sudden changes of direction, realizations, and self-corrections
 - 🍾 **Premature celebrations** — victory laps that get overturned a few messages later
-- 🎬 **Story + session persona (experimental)** — grounded multi-step stories and a session-scoped character read from observable behavior
+- 🎬 **Story + session persona (experimental)** — a grounded candidate route for multi-step plots and a session-scoped character read; neither card is mandatory
 - 📊 **Session / weekly / monthly Wrapped** — later, compare patterns across sessions and agents
 
 ## Goal
@@ -37,15 +37,18 @@ Observable SessionEvent[] ──────────────────
   │ P2 MomentBuilder                                    │   ↓
   │   ↓                                                 │ local grounding / validation
   │ P3 MomentRanker                                     │   ↓
-  │   ↓                                                 │ VerifiedStoryArc[]
+  │   ↓                                                 │ verified Story candidates
   │ P3.5 AwardComposer                                  │   ↓
-  │   ↓                                                 │ deterministic Persona Aggregator
+  │   ↓                                                 │ local Wrapped admission
   │ P4 WrappedReport                                    │   ↓
+  │                                                     │ deterministic Persona Aggregator
   │                                                     │ LLM-B: Narrator
   │                                                     │ editorial language only
-  └──────────────────────────→ final presentation ←──────┘
+  └────────────────────────→ Entertainment Candidate Pool ←┘
                                   ↓
-                       🏆 awards + 🎬 story + 🎭 persona
+                     Wrapped Composer (next product layer)
+                                  ↓
+                  best 3–5 optional cards, never a replay
 ```
 
 A P3 Moment can help P8 choose context, but it is only a **secondary hint**. It is no longer the gate that decides what the story model is allowed to see.
@@ -61,7 +64,7 @@ A P3 Moment can help P8 choose context, but it is only a **secondary hint**. It 
 - ✅ **P5 — Session ingestion**: host-neutral `IngestedSession`; current DeepSeek Harness JSONL/Zstandard support. DSH now also recovers observable `tool/call`, `tool/result`, and `turn/end` records into a host-neutral `SessionEvent[]` stream.
 - ✅ **P6 — Real-session evaluation / calibration**: bounded human-review cases, deterministic A/B comparisons, keep/drop/skip, fun ratings and missed moments.
 - ✅ **P7 — Local Evaluation Runner**: resumable workspace/CLI with review-protocol + locale isolation and language-bias safeguards.
-- 🧪 **P8 v2 — Story + session persona**: opt-in, event-first, two-pass semantic architecture. Story Miner proposes structure, local code validates it, persona signals are aggregated deterministically, and a second narrator may only write editorial titles/commentary/nicknames.
+- 🧪 **P8 — Story + session persona**: opt-in, event-first semantic candidate route. Story Miner proposes structure, local code validates truth and then admits only distinctive human-visible turns; routine tool worklogs produce no Story or Persona card. A second narrator may only write editorial titles/commentary/nicknames for admitted candidates.
 
 ## P7 quick start
 
@@ -94,9 +97,9 @@ P7 protocol v2 binds judgments to both the review protocol and presentation loca
 
 See `docs/p7-local-review-runner.md` for the review protocol and storage behavior.
 
-## Experimental P8 v2: story + session persona
+## Experimental P8: story + session persona
 
-P8 accepts that “剧情 + 人格” is genuinely semantic, but it does not hand the entire transcript to an LLM and hope for a funny summary.
+P8 accepts that “剧情 + 人格” is genuinely semantic, but it does not hand the entire transcript to an LLM and hope for a funny summary. It is an Entertainment Candidate Pool input, not a required Session Replay card.
 
 ### 1. Observable event stream first
 
@@ -158,7 +161,11 @@ Before any generated story can reach presentation, local code verifies:
 
 Candidates that fail these checks are dropped instead of being narrated.
 
-### 5. Persona is aggregated locally
+### 5. A true tool sequence still has to earn a card
+
+Passing structural grounding only means a sequence happened. A bare `tool failure → another tool action` is often useful local evidence but ordinary worklog, not a reason to show a story or invent a personality. Before narration, P8 admits a Story only when the same verified episode contains a human-visible turn (claim, correction/reversal, user pushback, capability gap, or breakdown) or overlaps a grounded P3 dramatic Moment. Otherwise it emits no P8 card and makes no narration call.
+
+### 6. Persona is aggregated locally
 
 Persona does not come from an LLM inventing “内心戏 82/100”. Agent Wrapped derives coarse observed signals from verified stories + grounded Moments, for example:
 
@@ -171,7 +178,7 @@ Persona does not come from an LLM inventing “内心戏 82/100”. Agent Wrappe
 
 The exact thresholds are local and reproducible. These are **session behavior signals**, not claims that a model has an inherent personality.
 
-### 6. LLM-B: Narrator does editorial language only
+### 7. LLM-B: Narrator does editorial language only
 
 After structure and persona signals are fixed, the second optional pass may write only:
 
@@ -203,9 +210,9 @@ export AGENT_WRAPPED_LLM_JSON_MODE=1
 export AGENT_WRAPPED_INCLUDE_REASONING=1
 ```
 
-`story:latest` prints the number of bounded events/windows, secondary Moment hints, redaction count and truncation state before semantic generation. A normal P8 v2 run may make **two** semantic calls: Story Miner, then Narrator after local validation. The full DSH transcript is not included in either request.
+`story:latest` prints the number of bounded events/windows, secondary Moment hints, redaction count and truncation state before semantic generation. A normal P8 run may make **two** semantic calls: Story Miner, then Narrator only after local validation and local Wrapped admission. The full DSH transcript is not included in either request.
 
-P8 is still experimental and is not part of P7 calibration yet.
+P8 is still experimental and is not part of P7 calibration yet. P4 awards and P8 candidates do not yet compete in one cross-route final composer; that is deliberately deferred until real-session calibration shows the candidate pool is both truthful and worth showing.
 
 ## Public APIs
 
@@ -281,7 +288,7 @@ The host-neutral boundaries are now both `TranscriptMessage[]` for the local tex
 9. **Calibrate on people.** P6/P7 remain the source of truth for whether local Moments are useful; P8 needs its own real-session evaluation before becoming default.
 10. **Labels must match candidates and presentation.** P7 protocol/locale isolation remains intact.
 11. **Story Discovery is not P3-gated.** P3 Moments may hint, but observable event windows get independent coverage.
-12. **LLMs interpret structure and write copy; local code owns evidence boundaries.** Story Miner output is validated before Narrator sees it.
+12. **LLMs interpret structure and write copy; local code owns evidence boundaries and card admission.** Story Miner output is validated and then selectively admitted before Narrator sees it.
 13. **No fake persona precision.** Persona magnitude is deterministic and coarse, never an LLM-generated 0–100 number.
 14. **Remote evidence is bounded and redacted.** Full transcripts stay local unless a future explicit mode says otherwise.
 
@@ -312,7 +319,7 @@ npm run test:p8
 
 ## Status
 
-🚧 Early prototype. P0–P7 are implemented. P8 v2 is an opt-in architecture experiment. The next evidence should come from side-by-side real-session review: does event-first Story Discovery recover the “剧情 + 人格” people actually enjoy, and is the added value worth its cost/latency/privacy tradeoff? If yes, the next engineering work is richer host adapters and explicit P8 human evaluation — not more award-specific regex detectors.
+🚧 Early prototype. P0–P7 are implemented. P8 is an opt-in candidate route. The next evidence should come from side-by-side real-session review: does event-first Story Discovery recover the “剧情 + 人格” people actually enjoy, and is the added value worth its cost/latency/privacy tradeoff? If yes, the next engineering work is an explicit P8 human evaluation and then a cross-route Wrapped Composer — not more award-specific regex detectors.
 
 ## License
 

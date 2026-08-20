@@ -46,6 +46,7 @@ export * from "./semantic/toolOutcome.js";
 export * from "./semantic/evidence.js";
 export * from "./semantic/prompt.js";
 export * from "./semantic/storyMiner.js";
+export * from "./semantic/storyAdmission.js";
 export * from "./semantic/persona.js";
 export * from "./semantic/storyPersona.js";
 export * from "./semantic/openaiCompatible.js";
