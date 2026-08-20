@@ -38,3 +38,10 @@ export * from "./review/types.js";
 export * from "./review/workspace.js";
 export * from "./review/reviewer.js";
 export * from "./review/runner.js";
+
+export * from "./semantic/types.js";
+export * from "./semantic/evidence.js";
+export * from "./semantic/prompt.js";
+export * from "./semantic/storyPersona.js";
+export * from "./semantic/openaiCompatible.js";
+export * from "./semantic/renderer.js";
