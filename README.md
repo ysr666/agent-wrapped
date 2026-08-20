@@ -10,82 +10,77 @@ Instead of only counting tokens and tool calls, Agent Wrapped looks for the part
 - 🐺 **Called-it-too-early moments** — repeated declarations that the root cause was found
 - 🧠 **Plot twists** — sudden changes of direction, realizations, and self-corrections
 - 🍾 **Premature celebrations** — victory laps that get overturned a few messages later
-- 🎬 **Story + persona (experimental)** — an optional evidence-bound LLM layer that turns several grounded moments into a session story and “this session played like…” character read
+- 🎬 **Story + session persona (experimental)** — grounded multi-step stories and a session-scoped character read from observable behavior
 - 📊 **Session / weekly / monthly Wrapped** — later, compare patterns across sessions and agents
 
 ## Goal
 
 Agent Wrapped is intentionally entertainment-first. It should feel more like an awards show for your AI sessions than another productivity dashboard.
 
-The architecture is **moment-first, award-second**. The semantic layer is optional and sits on top of bounded evidence; it does not replace the local Moment Engine:
+P0–P7 remain the local quote/moment pipeline. Experimental P8 adds a second, event-first story route so a hilarious tool sequence can be discovered even when no individual assistant sentence was ranked as a Moment:
 
 ```text
-Local session logs
+Host session logs
   ↓
-Session ingestion         ✅ P5
+Session ingestion
   ↓
-TranscriptMessage[]
-  ↓
-EventExtractor            ✅ P0
-  ↓
-MomentGraph               ✅ P1
-  ↓
-MomentBuilder             ✅ P2
-  ↓
-MomentRanker              ✅ P3
-  ↓
-AwardComposer             ✅ P3.5
-  ↓
-WrappedReport             ✅ P4
-  ↓
-Real-session evaluation   ✅ P6
-  ↓
-Local review runner       ✅ P7
-  ↓
-Bounded evidence packet
-  ↓
-Optional semantic narrator 🧪 P8 spike
-  ↓
-🎬 Story + 🎭 session persona
+Observable SessionEvent[] ───────────────────────────────┐
+  │                                                     │
+  ├─ text route                                         ├─ story route
+  │   ↓                                                 │   ↓
+  │ TranscriptMessage[]                                 │ bounded story windows
+  │   ↓                                                 │   ↓
+  │ P0 EventExtractor                                   │ redact secrets / identity
+  │   ↓                                                 │   ↓
+  │ P1 MomentGraph                                      │ LLM-A: Story Miner
+  │   ↓                                                 │ structure only
+  │ P2 MomentBuilder                                    │   ↓
+  │   ↓                                                 │ local grounding / validation
+  │ P3 MomentRanker                                     │   ↓
+  │   ↓                                                 │ VerifiedStoryArc[]
+  │ P3.5 AwardComposer                                  │   ↓
+  │   ↓                                                 │ deterministic Persona Aggregator
+  │ P4 WrappedReport                                    │   ↓
+  │                                                     │ LLM-B: Narrator
+  │                                                     │ editorial language only
+  └──────────────────────────→ final presentation ←──────┘
+                                  ↓
+                       🏆 awards + 🎬 story + 🎭 persona
 ```
 
-An award is how a strong moment gets presented; it is not a reason to create another independent language parser.
+A P3 Moment can help P8 choose context, but it is only a **secondary hint**. It is no longer the gate that decides what the story model is allowed to see.
 
 ## Architecture status
 
-- ✅ **P0 — Event model + EventExtractor**: unified multi-label events, topics, claims/stance, verbal families, drama and standalone-quality signals.
+- ✅ **P0 — Event model + EventExtractor**: unified multi-label text events, topics, claims/stance, verbal families, drama and standalone-quality signals.
 - ✅ **P1 — Moment Graph**: `repeats`, `similar_to`, `same_topic`, `contradicts`, `retracts`, `followed_by`, and `celebrates_before` relations.
 - ✅ **P2 — MomentBuilder**: composes graph structure into `one_liner`, `repeated_pattern`, `boomerang`, `false_dawn`, `plot_twist`, and `correction_arc` moments.
 - ✅ **P3 — MomentRanker**: ranks complete moments with separate `funScore` and `confidence`, plus standalone quality, context payoff, surprise, rarity, readability, and structural strength.
-- ✅ **P3.5 — AwardComposer**: protects the three MVP slots (quote, repeated verbal pattern, boomerang), fills remaining slots with strong side moments, deduplicates overlapping structural views, and never forces weak cards just to reach a quota.
-- ✅ **P4 — WrappedReport / output layer**: runs P0→P3.5 end to end, returns a compact share-oriented report, renders Markdown/plain text, and exposes lightweight preference hooks.
-- ✅ **P5 — Session ingestion**: adds the host-neutral `IngestedSession` boundary and a real DeepSeek Harness adapter for durable `session.jsonl` logs, including local discovery and DSH's default concatenated Zstandard storage.
-- ✅ **P6 — Real-session evaluation / calibration**: turns ingested sessions into bounded human-review cases, generates deterministic pairwise comparisons, records keep/drop/skip + fun ratings + missed moments, and aggregates ranking/award calibration metrics.
-- ✅ **P7 — Local Evaluation Runner**: adds a resumable local CLI/workspace loop for preparing real DSH sessions, reviewing final cards and blind A/B rankings, checkpointing every answer, protecting labels with review-protocol/locale metadata, and printing calibration/status reports.
-- 🧪 **P8 — Semantic story/persona spike**: optional provider-neutral LLM seam. It sends only top Moment evidence plus nearby user/assistant/tool context, validates every returned story/persona claim against evidence ids, and fails closed on invented references. It is off by default and is not part of P7 calibration yet.
+- ✅ **P3.5 — AwardComposer**: protects the core quote/repetition/boomerang slots, fills remaining slots with strong side moments, deduplicates overlapping views, and does not force weak cards.
+- ✅ **P4 — WrappedReport / output**: runs P0→P3.5 end to end and preserves original source wording.
+- ✅ **P5 — Session ingestion**: host-neutral `IngestedSession`; current DeepSeek Harness JSONL/Zstandard support. DSH now also recovers observable `tool/call`, `tool/result`, and `turn/end` records into a host-neutral `SessionEvent[]` stream.
+- ✅ **P6 — Real-session evaluation / calibration**: bounded human-review cases, deterministic A/B comparisons, keep/drop/skip, fun ratings and missed moments.
+- ✅ **P7 — Local Evaluation Runner**: resumable workspace/CLI with review-protocol + locale isolation and language-bias safeguards.
+- 🧪 **P8 v2 — Story + session persona**: opt-in, event-first, two-pass semantic architecture. Story Miner proposes structure, local code validates it, persona signals are aggregated deterministically, and a second narrator may only write editorial titles/commentary/nicknames.
 
 ## P7 quick start
-
-Build once, then run the local experiment loop:
 
 ```bash
 npm run build
 
-# 1. Read the newest real DSH sessions and create/update the local review workspace.
+# Prepare newest real DSH sessions.
 node dist/cli.js dsh --latest 30
 
-# 2. Review one session at a time. Re-running resumes unanswered items.
+# Review one session at a time, or use --all.
 node dist/cli.js review
-
-# Or continue through every incomplete session.
 node dist/cli.js review --all
 
-# 3. Inspect progress and calibration.
+# Inspect progress/calibration.
 node dist/cli.js status
 node dist/cli.js calibration
 ```
 
-When installed as a package/bin, the same commands are:
+When installed as a package/bin:
 
 ```bash
 agent-wrapped dsh --latest 30
@@ -93,37 +88,102 @@ agent-wrapped review
 agent-wrapped calibration
 ```
 
-The default P7 workspace is `$AGENT_WRAPPED_HOME/review-workspace.json`, falling back to `~/.agent-wrapped/review-workspace.json`. It stores P6 evaluation cases and human review data, **not copies of the full original DSH transcripts**.
+The default workspace is `$AGENT_WRAPPED_HOME/review-workspace.json`, falling back to `~/.agent-wrapped/review-workspace.json`. It stores evaluation cases and human review data, not copies of full DSH transcripts.
 
-P7 review protocol v2 binds every judgment to both the protocol version and a presentation locale. A new workspace defaults to `zh-CN`; an existing workspace keeps its locale when `dsh` is re-run without `--locale`. To switch intentionally, run for example:
-
-```bash
-agent-wrapped dsh --latest 30 --locale en
-```
-
-Changing locale, changing the review protocol, or changing a session's evaluation-case fingerprint invalidates incompatible human labels instead of mixing them into one calibration dataset. Legacy v1 workspaces keep their P6 cases but discard old unversioned judgments.
-
-Chinese review keeps original source wording as evidence and adds local semantic hints where the presentation layer can do so reliably. If an English award still lacks enough Chinese coverage, the reviewer can `skip` it; `skip` is not counted as a drop or a fun rating. If either side of a zh-CN A/B task has incomplete language coverage, P7 automatically skips that pair and excludes it from pairwise accuracy rather than measuring English-reading friction.
-
-Pairwise review remains blind to `funScore`, confidence, predicted winner, and selected/rejected status. Award review still shows the award category because the question there is whether that final card belongs in the Wrapped.
+P7 protocol v2 binds judgments to both the review protocol and presentation locale. Changing the candidate set, protocol, or locale invalidates incompatible labels rather than mixing them. In `zh-CN`, an incompletely localized English A/B pair is automatically skipped instead of measuring English-reading friction.
 
 See `docs/p7-local-review-runner.md` for the review protocol and storage behavior.
 
-## Experimental P8: story + session persona
+## Experimental P8 v2: story + session persona
 
-The first P8 spike accepts that story/persona inference is a genuinely semantic task. Instead of trying to encode every “破防→冷静→继续干活” or “能力没有→硬换路完成” pattern as regexes, it keeps P0–P7 local and deterministic, then gives an explicitly configured LLM a **bounded evidence packet**.
+P8 accepts that “剧情 + 人格” is genuinely semantic, but it does not hand the entire transcript to an LLM and hope for a funny summary.
 
-The packet contains only:
+### 1. Observable event stream first
+
+Host adapters normalize what actually happened into `SessionEvent[]`:
 
 ```text
-Top P3 moments
-+ nearby user / assistant / tool messages
-+ structural evidence already found by the Moment Engine
+user_message
+assistant_text
+tool_call
+tool_result / tool_error
+turn_end
 ```
 
-It does **not** contain the entire DSH transcript. The narrator must cite supplied evidence ids for every story beat and persona dimension; unknown ids make parsing fail. “赛后解说” is explicitly editorial copy and is never treated as a source quote. Persona wording is session-scoped (“本场表现像…”), not a claim that a model has a permanent personality.
+For DSH, `tool/call`, `tool/result`, and `turn/end` are now read from the durable session log. This lets P8 see stories such as:
 
-No endpoint is assumed. To try the newest DSH session with any OpenAI-compatible endpoint:
+```text
+attempt delete
+→ permission error
+→ switch to another tool
+→ success
+```
+
+That story can be discovered even if P0–P3 found no funny assistant quote.
+
+### 2. Bounded story windows, not the full transcript
+
+Local code selects a small set of event windows around structural signals such as tool failures, user pushback, assistant corrections and turn failures. A small number of coverage windows is also sampled so Story Discovery is not entirely gated by hand-written cues.
+
+P3 Moments are included only as secondary attention hints.
+
+Before a remote semantic call, common secrets and identity-bearing text are redacted, including bearer tokens, common API-key/token forms, email addresses and home-directory usernames. Evidence is also capped by event count, per-event characters and total characters.
+
+### 3. LLM-A: Story Miner outputs structure only
+
+The first semantic pass may propose only a controlled structure such as:
+
+```json
+{
+  "arcKind": "failure_then_workaround",
+  "beats": [
+    { "kind": "attempt", "evidenceIds": ["event:..."] },
+    { "kind": "failure", "evidenceIds": ["event:..."] },
+    { "kind": "workaround", "evidenceIds": ["event:..."] }
+  ],
+  "confidence": "high"
+}
+```
+
+It is not allowed to write the story title, comedy copy, persona, or 0–100 scores.
+
+### 4. Local grounding validates more than “the ID exists”
+
+Before any generated story can reach presentation, local code verifies:
+
+- every cited event exists;
+- beats are in chronological order;
+- the cited actor/event type can support that beat (`user_pushback` must cite a user event, failure must cite a failure-like event, etc.);
+- the requested arc shape is actually present, for example failure before workaround.
+
+Candidates that fail these checks are dropped instead of being narrated.
+
+### 5. Persona is aggregated locally
+
+Persona does not come from an LLM inventing “内心戏 82/100”. Agent Wrapped derives coarse observed signals from verified stories + grounded Moments, for example:
+
+```text
+内心戏        high · 3
+自我纠错      medium · 2
+执着程度      high · 4
+临场变通      low · 1
+```
+
+The exact thresholds are local and reproducible. These are **session behavior signals**, not claims that a model has an inherent personality.
+
+### 6. LLM-B: Narrator does editorial language only
+
+After structure and persona signals are fixed, the second optional pass may write only:
+
+- a title for each verified story;
+- clearly labeled `赛后解说` editorial commentary;
+- a session-scoped persona nickname/tagline such as `本场表现像……`.
+
+It cannot add another tool result, user reaction, accident or source quote. Story facts stay in the verified structure.
+
+### Try the newest DSH session
+
+No endpoint is assumed. Configure any OpenAI-compatible endpoint explicitly:
 
 ```bash
 export AGENT_WRAPPED_LLM_BASE_URL="https://your-endpoint.example/v1"
@@ -137,23 +197,25 @@ Optional knobs:
 
 ```bash
 export AGENT_WRAPPED_LOCALE=zh-CN
-export AGENT_WRAPPED_TOP_MOMENTS=8
+export AGENT_WRAPPED_TOP_MOMENTS=6
 export AGENT_WRAPPED_LLM_JSON_MODE=1
 # Only when the host actually exposed reasoning to the user:
 export AGENT_WRAPPED_INCLUDE_REASONING=1
 ```
 
-`story:latest` prints the endpoint/model and the number of moments/context messages before sending the request. P8 is an experiment: its output should be reviewed against the original evidence before it becomes a default Wrapped surface.
+`story:latest` prints the number of bounded events/windows, secondary Moment hints, redaction count and truncation state before semantic generation. A normal P8 v2 run may make **two** semantic calls: Story Miner, then Narrator after local validation. The full DSH transcript is not included in either request.
+
+P8 is still experimental and is not part of P7 calibration yet.
 
 ## Public APIs
 
-For analysis-only use:
+Analysis-only Moment Engine:
 
 ```ts
 const moments = analyzeMoments(messages);
 ```
 
-For a complete Wrapped from normalized messages:
+Complete local Wrapped:
 
 ```ts
 const report = createWrappedReport(messages, {
@@ -163,18 +225,14 @@ const report = createWrappedReport(messages, {
 console.log(renderWrappedText(report));
 ```
 
-For current DeepSeek Harness local sessions:
+Current DeepSeek Harness local sessions:
 
 ```ts
 const sessions = await loadDshSessions({ maxSessions: 20 });
 const report = createWrappedReport(sessions[0].messages);
 ```
 
-DSH discovery follows the harness convention: `$DSH_HOME/sessions` when `DSH_HOME` is set, otherwise `~/.dsh/sessions`. It understands plaintext `session.jsonl` and the current default `session.jsonl.zstd` layout.
-
-Reasoning blocks are **not included by default**. `includeVisibleReasoning: true` is an explicit caller choice for hosts/surfaces where that reasoning was actually exposed to the user.
-
-For P6/P7 calibration APIs:
+P6/P7 calibration:
 
 ```ts
 const refreshed = await refreshLocalDshReviewWorkspace({
@@ -186,41 +244,46 @@ const refreshed = await refreshLocalDshReviewWorkspace({
 const calibration = calibrateReviewWorkspace(refreshed.workspace);
 ```
 
-For the P8 semantic spike:
+P8 v2:
 
 ```ts
-const evidence = buildSemanticEvidence(session, { topMoments: 8, contextRadius: 1 });
 const { narrator } = createOpenAICompatibleNarratorFromEnv();
-const raw = await narrator.generate(buildStoryPersonaPrompt(evidence));
-const semantic = parseSemanticStoryPersona(raw, evidence);
+const { report, evidence } = await generateSemanticStoryPersona(
+  session,
+  narrator,
+  { topMoments: 6 },
+);
+
+console.log(renderSemanticStoryPersonaText(report, evidence));
 ```
 
-Existing QuoteScorer, CatchphraseClusterer, BoomerangDetector, FacetScorer, and SessionAnalyzer APIs remain as compatibility surfaces while new work uses the Moment Engine pipeline.
-
-See `docs/moment-engine-architecture.md` for architecture and phase boundaries.
+Existing QuoteScorer, CatchphraseClusterer, BoomerangDetector, FacetScorer, and SessionAnalyzer APIs remain compatibility surfaces while new work uses the Moment Engine.
 
 ## Host coverage
 
-- ✅ DeepSeek Harness (DSH) — current durable JSONL/Zstandard session format
+- ✅ DeepSeek Harness — current durable JSONL/Zstandard format, including tool calls/results and turn outcomes
 - ⏭️ Claude Code — next adapter
 - ⏭️ OpenAI Codex — next adapter
 - ⏭️ OpenCode — later
 
-The ingestion boundary is host-neutral; adding another adapter must end in the same `TranscriptMessage[]` model instead of changing P0–P7 semantics.
+The host-neutral boundaries are now both `TranscriptMessage[]` for the local text/Moment route and `SessionEvent[]` for observable story behavior. A new host adapter should normalize into those shared contracts instead of leaking host-specific event semantics into P8.
 
 ## Design principles
 
 1. **Local-first by default.** P0–P7 work without another LLM call. P8 is explicit opt-in and has no default network endpoint.
-2. **Use only exposed transcript data.** Agent Wrapped analyzes visible messages made available by the host. It does not attempt to recover hidden chain-of-thought.
-3. **Original wording matters.** Award/report layers preserve the agent’s source wording instead of regenerating “funnier” quotes; semantic commentary is labeled as commentary.
-4. **Fun before analytics.** Token charts are optional; the memorable moments are the product.
-5. **Cross-agent core.** Core event, relation, moment, award, and evaluation definitions stay independent from any single model/runtime.
-6. **Fun score and confidence are different.** A moment can be hilarious while still requiring semantic verification before it is shown as fact.
-7. **No award-specific parser sprawl.** New ideas should first be modeled as an Event, Relation, or Moment composition before adding presentation logic.
-8. **Do not force a Wrapped.** If nothing clears the quality threshold, the report can legitimately contain zero awards.
-9. **Calibrate on people, not synthetic regex wins.** P6/P7 measure pairwise human preference, award keep-rate, and missed moments before semantic behavior is promoted to the default product.
-10. **Human labels must match both candidates and presentation.** P7 fingerprints evaluation cases and binds reviews to a protocol version + locale; stale or language-incompatible judgments are invalidated or skipped.
-11. **LLMs may interpret, not fabricate.** P8 output must cite bounded evidence ids, and unknown evidence references fail closed.
+2. **Use only exposed / observable session data.** Agent Wrapped does not attempt to recover hidden chain-of-thought.
+3. **Original wording matters.** Source quotes stay source quotes; editorial narration is visibly labeled as narration.
+4. **Fun before analytics.** Token charts are optional; memorable moments are the product.
+5. **Cross-agent core.** Core event, moment, story and evaluation concepts stay independent from any single runtime.
+6. **Fun score and confidence are different.** Entertainment value never substitutes for factual confidence.
+7. **No parser sprawl.** New ideas should first fit Event → Relation → Moment/Story → Presentation rather than becoming another one-off detector.
+8. **Do not force a Wrapped.** Weak or ungrounded material may legitimately produce no card/story.
+9. **Calibrate on people.** P6/P7 remain the source of truth for whether local Moments are useful; P8 needs its own real-session evaluation before becoming default.
+10. **Labels must match candidates and presentation.** P7 protocol/locale isolation remains intact.
+11. **Story Discovery is not P3-gated.** P3 Moments may hint, but observable event windows get independent coverage.
+12. **LLMs interpret structure and write copy; local code owns evidence boundaries.** Story Miner output is validated before Narrator sees it.
+13. **No fake persona precision.** Persona magnitude is deterministic and coarse, never an LLM-generated 0–100 number.
+14. **Remote evidence is bounded and redacted.** Full transcripts stay local unless a future explicit mode says otherwise.
 
 ## Development
 
@@ -249,7 +312,7 @@ npm run test:p8
 
 ## Status
 
-🚧 Early prototype. P0–P7 are implemented and P8 is an opt-in semantic experiment. The next evidence we need is side-by-side review of P7 moments versus P8 story/persona output on real DSH sessions: does the semantic layer recover the “剧情+人格” users actually enjoy, and does its added value justify the privacy/cost/latency tradeoff?
+🚧 Early prototype. P0–P7 are implemented. P8 v2 is an opt-in architecture experiment. The next evidence should come from side-by-side real-session review: does event-first Story Discovery recover the “剧情 + 人格” people actually enjoy, and is the added value worth its cost/latency/privacy tradeoff? If yes, the next engineering work is richer host adapters and explicit P8 human evaluation — not more award-specific regex detectors.
 
 ## License
 
