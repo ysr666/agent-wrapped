@@ -6,7 +6,11 @@ import { join } from "node:path";
 
 import { reviewEvaluationCase } from "../dist/review/reviewer.js";
 import { CURRENT_REVIEW_PROTOCOL_VERSION } from "../dist/review/protocol.js";
-import { calibrateReviewWorkspace, saveReviewCheckpoint } from "../dist/review/runner.js";
+import {
+  calibrateReviewWorkspace,
+  refreshLocalDshReviewWorkspace,
+  saveReviewCheckpoint,
+} from "../dist/review/runner.js";
 import {
   computeReviewProgress,
   createOrRefreshReviewWorkspace,
@@ -156,6 +160,25 @@ test("loading a legacy v1 workspace keeps cases but discards unversioned human l
     assert.equal(migrated.cases.length, 1);
     assert.equal(migrated.reviews.length, 0);
     assert.equal(migrated.completedSessionIds.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("P7 refuses to replace a frozen review pack when a selected local session is missing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-wrapped-fixed-review-"));
+  try {
+    await assert.rejects(
+      refreshLocalDshReviewWorkspace({
+        store: join(directory, "workspace.json"),
+        ingest: {
+          root: join(directory, "missing-sessions"),
+          maxSessions: 10,
+          sessionIdHashes: ["000000000000"],
+        },
+      }),
+      /expected 1 sessions but matched 0/u,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

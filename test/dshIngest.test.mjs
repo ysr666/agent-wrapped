@@ -223,6 +223,9 @@ test("P5 can reproduce a local fixed review subset from session-id hashes", asyn
     const selectedHash = createHash("sha256").update(selectedId).digest("hex").slice(0, 12);
     const sessions = await loadDshSessions({ root, maxSessions: 10, sessionIdHashes: [selectedHash] });
     assert.deepEqual(sessions.map((session) => session.id), [selectedId]);
+
+    const missing = await loadDshSessions({ root, maxSessions: 10, sessionIdHashes: ["000000000000"] });
+    assert.equal(missing.length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

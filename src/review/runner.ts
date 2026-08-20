@@ -25,6 +25,8 @@ export interface SaveReviewCheckpointOptions {
 
 export interface DshReviewIngestionHealth {
   discoveredSessions: number;
+  /** Present only when a frozen local selector was requested. */
+  requestedSessions?: number;
   sessionsWithAssistantMessages: number;
   assistantMessages: number;
   sessionsWithMoments: number;
@@ -48,6 +50,19 @@ export async function refreshLocalDshReviewWorkspace(
     ingest: options.ingest,
     evaluation: options.evaluation,
   });
+  const requestedSessionHashes = [...new Set(
+    (options.ingest?.sessionIdHashes ?? []).map((hash) => hash.trim().toLowerCase()).filter(Boolean),
+  )];
+
+  // A partial frozen split is not an acceptable replacement for the intended
+  // calibration pack. Fail before overwriting a review workspace so missing or
+  // pruned local artifacts cannot silently turn into a misleading sample.
+  if (requestedSessionHashes.length > 0 && batch.discoveredSessions !== requestedSessionHashes.length) {
+    throw new Error(
+      `Fixed DSH review selection expected ${requestedSessionHashes.length} sessions but matched ${batch.discoveredSessions}. ` +
+      "The review workspace was not refreshed.",
+    );
+  }
 
   // A batch of several real sessions with zero assistant text is almost never a
   // legitimate "quiet session" result. It means the adapter likely stopped
@@ -79,6 +94,7 @@ export async function refreshLocalDshReviewWorkspace(
     path,
     ingestion: {
       discoveredSessions: batch.discoveredSessions,
+      ...(requestedSessionHashes.length > 0 ? { requestedSessions: requestedSessionHashes.length } : {}),
       sessionsWithAssistantMessages: batch.sessionsWithAssistantMessages,
       assistantMessages: batch.assistantMessages,
       sessionsWithMoments: batch.sessionsWithMoments,
