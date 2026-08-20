@@ -1,111 +1,21 @@
 import type { IngestedSession } from "../ingest/types.js";
 import { buildSemanticEvidence, type SemanticEvidenceOptions } from "./evidence.js";
-import { buildStoryPersonaPrompt } from "./prompt.js";
+import { aggregatePersonaSignals } from "./persona.js";
+import { buildNarrationPrompt, buildStoryMinerPrompt } from "./prompt.js";
+import { parseStoryMinerOutput, validateStoryCandidates } from "./storyMiner.js";
 import type {
   SemanticEvidenceBundle,
+  SemanticNarration,
   SemanticNarrator,
-  SemanticPersonaDimension,
-  SemanticPersonaProfile,
-  SemanticStoryArc,
-  SemanticStoryBeat,
+  SemanticPersonaSignal,
   SemanticStoryPersonaReport,
+  VerifiedStoryArc,
 } from "./types.js";
 
-interface JsonObject {
-  [key: string]: unknown;
-}
+interface JsonObject { [key: string]: unknown }
 
 function object(value: unknown): JsonObject | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as JsonObject)
-    : undefined;
-}
-
-function text(value: unknown, path: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`Semantic narrator returned invalid ${path}.`);
-  return value.trim();
-}
-
-function optionalText(value: unknown, path: string): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  return text(value, path);
-}
-
-function allowedEvidence(bundle: SemanticEvidenceBundle): Set<string> {
-  return new Set([
-    ...bundle.moments.map((moment) => moment.id),
-    ...bundle.messages.map((message) => message.id),
-  ]);
-}
-
-function evidenceIds(value: unknown, allowed: Set<string>, path: string): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`Semantic narrator returned ${path} without evidence ids.`);
-  }
-  const output: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || !allowed.has(entry)) {
-      throw new Error(`Semantic narrator referenced unknown evidence id in ${path}: ${String(entry)}`);
-    }
-    if (!output.includes(entry)) output.push(entry);
-  }
-  return output;
-}
-
-function parseBeat(value: unknown, allowed: Set<string>, index: number): SemanticStoryBeat {
-  const entry = object(value);
-  if (!entry) throw new Error(`Semantic narrator returned invalid story.beats[${index}].`);
-  return {
-    title: text(entry.title, `story.beats[${index}].title`),
-    summary: text(entry.summary, `story.beats[${index}].summary`),
-    evidenceIds: evidenceIds(entry.evidenceIds, allowed, `story.beats[${index}]`),
-  };
-}
-
-function parseStory(value: unknown, allowed: Set<string>): SemanticStoryArc | undefined {
-  if (value === undefined || value === null) return undefined;
-  const entry = object(value);
-  if (!entry) throw new Error("Semantic narrator returned invalid story.");
-  if (!Array.isArray(entry.beats) || entry.beats.length === 0 || entry.beats.length > 5) {
-    throw new Error("Semantic narrator story must contain between 1 and 5 beats.");
-  }
-  return {
-    title: text(entry.title, "story.title"),
-    synopsis: text(entry.synopsis, "story.synopsis"),
-    beats: entry.beats.map((beat, index) => parseBeat(beat, allowed, index)),
-    commentary: optionalText(entry.commentary, "story.commentary"),
-  };
-}
-
-function parseDimension(value: unknown, allowed: Set<string>, index: number): SemanticPersonaDimension {
-  const entry = object(value);
-  if (!entry) throw new Error(`Semantic narrator returned invalid persona.dimensions[${index}].`);
-  const score = entry.score;
-  if (typeof score !== "number" || !Number.isInteger(score) || score < 0 || score > 100) {
-    throw new Error(`Semantic narrator returned invalid persona.dimensions[${index}].score.`);
-  }
-  return {
-    key: text(entry.key, `persona.dimensions[${index}].key`),
-    label: text(entry.label, `persona.dimensions[${index}].label`),
-    score,
-    rationale: text(entry.rationale, `persona.dimensions[${index}].rationale`),
-    evidenceIds: evidenceIds(entry.evidenceIds, allowed, `persona.dimensions[${index}]`),
-  };
-}
-
-function parsePersona(value: unknown, allowed: Set<string>): SemanticPersonaProfile | undefined {
-  if (value === undefined || value === null) return undefined;
-  const entry = object(value);
-  if (!entry) throw new Error("Semantic narrator returned invalid persona.");
-  if (!Array.isArray(entry.dimensions) || entry.dimensions.length === 0 || entry.dimensions.length > 6) {
-    throw new Error("Semantic narrator persona must contain between 1 and 6 dimensions.");
-  }
-  return {
-    label: text(entry.label, "persona.label"),
-    tagline: text(entry.tagline, "persona.tagline"),
-    dimensions: entry.dimensions.map((dimension, index) => parseDimension(dimension, allowed, index)),
-    evidenceIds: evidenceIds(entry.evidenceIds, allowed, "persona"),
-  };
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonObject : undefined;
 }
 
 function stripCodeFence(raw: string): string {
@@ -114,14 +24,24 @@ function stripCodeFence(raw: string): string {
   return match?.[1]?.trim() ?? trimmed;
 }
 
-/**
- * Parse and evidence-check an LLM response. Unknown evidence references fail
- * closed instead of letting an invented story leak into the Wrapped output.
- */
-export function parseSemanticStoryPersona(
+function boundedText(value: unknown, path: string, maxChars: number): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Semantic narrator returned invalid ${path}.`);
+  const trimmed = value.trim();
+  if (trimmed.length > maxChars) throw new Error(`Semantic narrator returned overlong ${path}.`);
+  return trimmed;
+}
+
+function optionalBoundedText(value: unknown, path: string, maxChars: number): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  return boundedText(value, path, maxChars);
+}
+
+export function parseNarrationOutput(
   raw: string,
-  bundle: SemanticEvidenceBundle,
-): SemanticStoryPersonaReport {
+  stories: VerifiedStoryArc[],
+  personaSignals: SemanticPersonaSignal[],
+  locale: "zh-CN" | "en",
+): SemanticNarration {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripCodeFence(raw));
@@ -130,53 +50,113 @@ export function parseSemanticStoryPersona(
   }
   const root = object(parsed);
   if (!root) throw new Error("Semantic narrator response is not a JSON object.");
-
-  const allowed = allowedEvidence(bundle);
-  const story = parseStory(root.story, allowed);
-  const persona = parsePersona(root.persona, allowed);
-  const insufficientEvidence = optionalText(root.insufficientEvidence, "insufficientEvidence");
-  if (!story && !persona && !insufficientEvidence) {
-    throw new Error("Semantic narrator returned neither story/persona nor an insufficient-evidence reason.");
+  const storyIds = new Set(stories.map((story) => story.id));
+  const storyCards: SemanticNarration["storyCards"] = [];
+  if (root.storyCards !== undefined && root.storyCards !== null) {
+    if (!Array.isArray(root.storyCards) || root.storyCards.length > stories.length) {
+      throw new Error("Semantic narrator returned invalid storyCards.");
+    }
+    for (const [index, value] of root.storyCards.entries()) {
+      const entry = object(value);
+      if (!entry) throw new Error(`Semantic narrator returned invalid storyCards[${index}].`);
+      const storyId = boundedText(entry.storyId, `storyCards[${index}].storyId`, 80);
+      if (!storyIds.has(storyId)) throw new Error(`Semantic narrator referenced unknown story id: ${storyId}`);
+      if (storyCards.some((card) => card.storyId === storyId)) throw new Error(`Semantic narrator duplicated story id: ${storyId}`);
+      storyCards.push({
+        storyId,
+        title: boundedText(entry.title, `storyCards[${index}].title`, 100),
+        commentary: optionalBoundedText(entry.commentary, `storyCards[${index}].commentary`, 260),
+      });
+    }
   }
 
-  const evidenceUsed = new Set<string>();
-  for (const beat of story?.beats ?? []) for (const id of beat.evidenceIds) evidenceUsed.add(id);
-  for (const dimension of persona?.dimensions ?? []) for (const id of dimension.evidenceIds) evidenceUsed.add(id);
-  for (const id of persona?.evidenceIds ?? []) evidenceUsed.add(id);
+  let persona: SemanticNarration["persona"];
+  if (root.persona !== undefined && root.persona !== null) {
+    if (personaSignals.length === 0) throw new Error("Semantic narrator returned a persona without deterministic persona signals.");
+    const entry = object(root.persona);
+    if (!entry) throw new Error("Semantic narrator returned invalid persona.");
+    let label = boundedText(entry.label, "persona.label", 100);
+    const tagline = boundedText(entry.tagline, "persona.tagline", 180);
+    if (locale === "zh-CN" && !/^本场/u.test(label)) label = `本场表现像${label}`;
+    if (locale === "en" && !/\bsession\b/iu.test(label)) label = `This session played like ${label}`;
+    persona = { label, tagline };
+  }
 
-  return {
-    version: 1,
-    locale: bundle.locale,
-    sessionId: bundle.sessionId,
-    story,
-    persona,
-    insufficientEvidence,
-    evidenceUsed: [...evidenceUsed],
-  };
+  return { storyCards, persona };
 }
 
 export interface GenerateSemanticStoryPersonaOptions extends SemanticEvidenceOptions {}
 
+/**
+ * P8 v2 pipeline:
+ * event evidence -> Story Miner(structure only) -> local validation ->
+ * deterministic persona aggregation -> Narrator(editorial language only).
+ */
 export async function generateSemanticStoryPersona(
   session: IngestedSession,
   narrator: SemanticNarrator,
   options: GenerateSemanticStoryPersonaOptions = {},
 ): Promise<{ report: SemanticStoryPersonaReport; evidence: SemanticEvidenceBundle }> {
   const evidence = buildSemanticEvidence(session, options);
-  if (evidence.moments.length === 0) {
+  if (evidence.events.length < 2 || evidence.windows.length === 0) {
     return {
       evidence,
       report: {
-        version: 1,
+        version: 2,
         locale: evidence.locale,
         sessionId: evidence.sessionId,
-        insufficientEvidence: evidence.locale === "zh-CN" ? "当前会话没有可供语义层复核的 Moment 候选。" : "No Moment candidates were available for semantic review.",
+        stories: [],
+        personaSignals: [],
+        insufficientEvidence: evidence.locale === "zh-CN"
+          ? "当前会话没有足够的可观察事件来发现剧情。"
+          : "Not enough observable events were available for story discovery.",
         evidenceUsed: [],
       },
     };
   }
 
-  const request = buildStoryPersonaPrompt(evidence);
-  const raw = await narrator.generate(request);
-  return { evidence, report: parseSemanticStoryPersona(raw, evidence) };
+  const miningRaw = await narrator.generate(buildStoryMinerPrompt(evidence));
+  const mining = parseStoryMinerOutput(miningRaw);
+  const validation = validateStoryCandidates(mining.candidates, evidence);
+  const personaSignals = aggregatePersonaSignals(validation.stories, evidence);
+
+  if (validation.stories.length === 0 && personaSignals.length === 0) {
+    return {
+      evidence,
+      report: {
+        version: 2,
+        locale: evidence.locale,
+        sessionId: evidence.sessionId,
+        stories: [],
+        personaSignals: [],
+        insufficientEvidence: mining.insufficientEvidence ?? (evidence.locale === "zh-CN"
+          ? "Story Miner 没有找到能通过本地结构校验的剧情。"
+          : "Story Miner found no story that passed local structural validation."),
+        evidenceUsed: [],
+      },
+    };
+  }
+
+  const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, validation.stories, personaSignals));
+  const narration = parseNarrationOutput(narrationRaw, validation.stories, personaSignals, evidence.locale);
+  const evidenceUsed = [
+    ...validation.stories.flatMap((story) => story.evidenceIds),
+    ...personaSignals.flatMap((signal) => signal.evidenceIds),
+  ].filter((id, index, all) => all.indexOf(id) === index);
+
+  return {
+    evidence,
+    report: {
+      version: 2,
+      locale: evidence.locale,
+      sessionId: evidence.sessionId,
+      stories: validation.stories,
+      personaSignals,
+      narration,
+      insufficientEvidence: validation.rejected.length > 0 && validation.stories.length === 0
+        ? mining.insufficientEvidence
+        : undefined,
+      evidenceUsed,
+    },
+  };
 }
