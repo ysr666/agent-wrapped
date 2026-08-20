@@ -1,4 +1,5 @@
 import type { TranscriptMessage } from "../core/types.js";
+import type { SessionEvent } from "../session-events/types.js";
 import type { IngestedSession, IngestionDiagnostic, SessionArtifactEncoding } from "./types.js";
 
 export interface ParseDshSessionOptions {
@@ -24,6 +25,13 @@ interface AssistantMessageView {
   shape: "current" | "legacy";
 }
 
+interface ToolResultView {
+  callId?: string;
+  content: unknown;
+  isError: boolean;
+  messageId?: string;
+}
+
 function object(value: unknown): JsonObject | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
@@ -32,6 +40,10 @@ function object(value: unknown): JsonObject | undefined {
 
 function string(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function number(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function eventTimestamp(value: unknown): string | undefined {
@@ -59,9 +71,37 @@ function textBlocks(value: unknown, acceptedTypes: Set<string>): Array<{ type: s
   return output;
 }
 
+function nestedVisibleText(value: unknown): string {
+  const output: string[] = [];
+  for (const block of contentBlocks(value)) {
+    const type = string(block.type);
+    if ((type === "text" || type === "reasoning") && string(block.text)) {
+      output.push(string(block.text) as string);
+      continue;
+    }
+    if (type === "tool-result") {
+      const nested = nestedVisibleText(block.content);
+      if (nested) output.push(nested);
+    }
+  }
+  return output.join("\n").trim();
+}
+
 function eventSeq(record: JsonObject, fallback: number): string {
   const seq = record.seq;
   return typeof seq === "number" && Number.isFinite(seq) ? String(seq) : String(fallback);
+}
+
+function eventOrder(record: JsonObject, fallback: number): number {
+  return number(record.seq) ?? fallback;
+}
+
+function eventBase(record: JsonObject, lineIndex: number): Pick<SessionEvent, "host" | "order" | "timestamp"> {
+  return {
+    host: "dsh",
+    order: eventOrder(record, lineIndex),
+    timestamp: eventTimestamp(record.time),
+  };
 }
 
 /**
@@ -100,8 +140,24 @@ function assistantMessageView(data: JsonObject): AssistantMessageView | undefine
   return undefined;
 }
 
+function toolResultView(data: JsonObject): ToolResultView | undefined {
+  const message = object(data.message);
+  if (!message) return undefined;
+  const source = object(message.source);
+  const blocks = contentBlocks(message.content);
+  const resultBlock = blocks.find((block) => block.type === "tool-result");
+  if (!resultBlock) return undefined;
+  return {
+    callId: string(resultBlock.toolCallId) ?? string(source?.callId),
+    content: resultBlock.content,
+    isError: resultBlock.isError === true || object(data.error) !== undefined,
+    messageId: string(message.id),
+  };
+}
+
 function appendUserMessage(
   messages: TranscriptMessage[],
+  events: SessionEvent[],
   record: JsonObject,
   data: JsonObject,
   lineIndex: number,
@@ -110,6 +166,7 @@ function appendUserMessage(
   if (blocks.length === 0) return;
   const text = blocks.map((block) => block.text).join("\n\n").trim();
   if (!text) return;
+  const messageIndex = messages.length;
   messages.push({
     id: `dsh:${eventSeq(record, lineIndex)}:user`,
     role: "user",
@@ -124,10 +181,19 @@ function appendUserMessage(
       sourceKind: string(object(data.source)?.kind),
     },
   });
+  events.push({
+    id: `dsh:${eventSeq(record, lineIndex)}:user-event`,
+    ...eventBase(record, lineIndex),
+    actor: "user",
+    kind: "user_message",
+    messageIndex,
+    text,
+  });
 }
 
 function appendAssistantMessage(
   messages: TranscriptMessage[],
+  events: SessionEvent[],
   diagnostics: IngestionDiagnostic[],
   record: JsonObject,
   data: JsonObject,
@@ -172,6 +238,7 @@ function appendAssistantMessage(
   for (const block of blocks) {
     const text = block.text.trim();
     if (!text) continue;
+    const messageIndex = messages.length;
     messages.push({
       id: `dsh:${seq}:assistant:${block.index}`,
       role: "assistant",
@@ -192,23 +259,124 @@ function appendAssistantMessage(
         surfaceOp: record.surfaceOp,
       },
     });
+    events.push({
+      id: `dsh:${seq}:assistant-event:${block.index}`,
+      ...eventBase(record, lineIndex),
+      actor: "assistant",
+      kind: "assistant_text",
+      turn: number(data.turn),
+      step: number(data.step),
+      messageIndex,
+      text,
+      metadata: { visibleReasoning: block.type === "reasoning" },
+    });
   }
 
   return { provider: view.provider, model: view.model };
 }
 
-/**
- * Parse the logical `session.jsonl` artifact emitted by DeepSeek Harness.
- *
- * DSH persists chunk rows and a final durable `assistant/message`; this adapter
- * intentionally consumes the latter so streaming deltas are not double-counted.
- */
+function appendToolCall(events: SessionEvent[], record: JsonObject, data: JsonObject, lineIndex: number): void {
+  const name = string(data.name);
+  const callId = string(data.callId);
+  const args = string(data.arguments);
+  if (!name && !callId && !args) return;
+  events.push({
+    id: `dsh:${eventSeq(record, lineIndex)}:tool-call`,
+    ...eventBase(record, lineIndex),
+    actor: "tool",
+    kind: "tool_call",
+    turn: number(data.turn),
+    step: number(data.step),
+    toolName: name,
+    callId,
+    toolArguments: args,
+  });
+}
+
+function appendToolResult(
+  messages: TranscriptMessage[],
+  events: SessionEvent[],
+  diagnostics: IngestionDiagnostic[],
+  record: JsonObject,
+  data: JsonObject,
+  lineIndex: number,
+): void {
+  const view = toolResultView(data);
+  if (!view) {
+    diagnostics.push({
+      level: "warning",
+      code: "tool-result-shape-unrecognized",
+      message: "Skipped a tool/result event whose tool-result block was not recognized.",
+      line: lineIndex + 1,
+    });
+    return;
+  }
+  const resultText = nestedVisibleText(view.content);
+  let messageIndex: number | undefined;
+  if (resultText) {
+    messageIndex = messages.length;
+    messages.push({
+      id: `dsh:${eventSeq(record, lineIndex)}:tool-result`,
+      role: "tool",
+      text: resultText,
+      host: "dsh",
+      timestamp: eventTimestamp(record.time),
+      metadata: {
+        dshEventType: "tool/result",
+        dshSeq: record.seq,
+        dshMessageId: view.messageId,
+        turn: data.turn,
+        step: data.step,
+        callId: view.callId,
+        isError: view.isError,
+        error: data.error,
+      },
+    });
+  }
+  const error = object(data.error);
+  events.push({
+    id: `dsh:${eventSeq(record, lineIndex)}:tool-result-event`,
+    ...eventBase(record, lineIndex),
+    actor: "tool",
+    kind: view.isError ? "tool_error" : "tool_result",
+    turn: number(data.turn),
+    step: number(data.step),
+    messageIndex,
+    text: resultText || undefined,
+    callId: view.callId,
+    isError: view.isError,
+    outcome: view.isError ? string(error?.code) ?? "error" : "success",
+    metadata: error ? { errorName: string(error.name), errorCode: string(error.code) } : undefined,
+  });
+}
+
+function appendTurnEnd(events: SessionEvent[], record: JsonObject, data: JsonObject, lineIndex: number): void {
+  const reason = object(data.reason);
+  const outcome = string(reason?.kind);
+  if (!outcome) return;
+  const error = object(reason?.error);
+  const isError = outcome !== "completed";
+  events.push({
+    id: `dsh:${eventSeq(record, lineIndex)}:turn-end`,
+    ...eventBase(record, lineIndex),
+    actor: "system",
+    kind: "turn_end",
+    turn: number(data.turn),
+    text: string(error?.message),
+    isError,
+    outcome,
+    metadata: error ? { errorCode: string(error.code), status: error.status } : undefined,
+  });
+}
+
+/** Parse the logical `session.jsonl` artifact emitted by DeepSeek Harness. */
 export function parseDshSessionJsonl(
   content: string,
   options: ParseDshSessionOptions = {},
 ): IngestedSession {
   const diagnostics: IngestionDiagnostic[] = [];
   const messages: TranscriptMessage[] = [];
+  const events: SessionEvent[] = [];
   const lines = content.split(/\r?\n/u);
 
   let header: JsonObject | undefined;
@@ -249,13 +417,14 @@ export function parseDshSessionJsonl(
     }
 
     if (type === "user/message") {
-      appendUserMessage(messages, record, data, lineIndex);
+      appendUserMessage(messages, events, record, data, lineIndex);
       continue;
     }
 
     if (type === "assistant/message") {
       const extracted = appendAssistantMessage(
         messages,
+        events,
         diagnostics,
         record,
         data,
@@ -264,6 +433,21 @@ export function parseDshSessionJsonl(
       );
       provider = extracted.provider ?? provider;
       model = extracted.model ?? model;
+      continue;
+    }
+
+    if (type === "tool/call") {
+      appendToolCall(events, record, data, lineIndex);
+      continue;
+    }
+
+    if (type === "tool/result") {
+      appendToolResult(messages, events, diagnostics, record, data, lineIndex);
+      continue;
+    }
+
+    if (type === "turn/end") {
+      appendTurnEnd(events, record, data, lineIndex);
     }
   }
 
@@ -292,6 +476,8 @@ export function parseDshSessionJsonl(
     });
   }
 
+  events.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+
   return {
     id,
     host: "dsh",
@@ -306,6 +492,7 @@ export function parseDshSessionJsonl(
       encoding: options.encoding ?? "jsonl",
     },
     messages,
+    events,
     diagnostics,
   };
 }

@@ -1,76 +1,139 @@
 import type { AgentHost } from "../core/types.js";
 import type { MomentType } from "../moments/types.js";
+import type { SessionEventActor, SessionEventKind } from "../session-events/types.js";
 import type { AwardLocale } from "../awards/types.js";
 
-export interface SemanticEvidenceMessage {
+export interface SemanticEvidenceEvent {
   id: string;
-  messageIndex: number;
-  role: "user" | "assistant" | "tool";
-  text: string;
+  order: number;
+  actor: SessionEventActor;
+  kind: SessionEventKind;
+  text?: string;
+  toolName?: string;
+  callId?: string;
+  isError?: boolean;
+  outcome?: string;
 }
 
-export interface SemanticEvidenceMoment {
+export interface SemanticMomentHint {
   id: string;
   type: MomentType;
   primaryText: string;
   relatedTexts: string[];
-  structuralEvidence: string[];
-  messageIndexes: number[];
-  contextMessageIds: string[];
+  eventIds: string[];
+}
+
+export interface SemanticStoryWindow {
+  id: string;
+  eventIds: string[];
+  /** Local structural reasons this window was selected; never an LLM conclusion. */
+  reasons: string[];
 }
 
 /**
- * Bounded, reviewable evidence sent to an optional semantic narrator.
- * The full source transcript is intentionally not part of this contract.
+ * Bounded, redacted evidence supplied to Story Miner. Unlike P8 v1, Story
+ * Discovery is not gated by P3 top moments: event windows are selected directly
+ * from the observable session stream, while Moment hints are only a secondary signal.
  */
 export interface SemanticEvidenceBundle {
-  version: 1;
+  version: 2;
   sessionId: string;
   host: AgentHost;
   title?: string;
   model?: string;
   locale: AwardLocale;
-  moments: SemanticEvidenceMoment[];
-  messages: SemanticEvidenceMessage[];
+  events: SemanticEvidenceEvent[];
+  windows: SemanticStoryWindow[];
+  momentHints: SemanticMomentHint[];
+  redactionCount: number;
   truncated: boolean;
 }
 
-export interface SemanticStoryBeat {
-  title: string;
-  summary: string;
+export type StoryArcKind =
+  | "false_dawn"
+  | "failure_then_workaround"
+  | "mistake_then_correction"
+  | "user_pushback_then_recovery"
+  | "capability_gap_then_improvisation"
+  | "breakdown_then_resume"
+  | "reversal"
+  | "other";
+
+export type StoryBeatKind =
+  | "setup"
+  | "claim"
+  | "attempt"
+  | "failure"
+  | "block"
+  | "user_pushback"
+  | "correction"
+  | "workaround"
+  | "recovery"
+  | "success"
+  | "reversal";
+
+/** First LLM pass: structure only. No titles, summaries, persona, or scores. */
+export interface SemanticStoryCandidate {
+  arcKind: StoryArcKind;
+  beats: Array<{
+    kind: StoryBeatKind;
+    evidenceIds: string[];
+  }>;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface VerifiedStoryBeat {
+  kind: StoryBeatKind;
   evidenceIds: string[];
 }
 
-export interface SemanticStoryArc {
-  title: string;
-  synopsis: string;
-  beats: SemanticStoryBeat[];
-  /** Clearly labeled editorial copy; never presented as a source quote. */
-  commentary?: string;
+export interface VerifiedStoryArc {
+  id: string;
+  arcKind: StoryArcKind;
+  beats: VerifiedStoryBeat[];
+  evidenceIds: string[];
+  confidence: "high" | "medium" | "low";
 }
 
-export interface SemanticPersonaDimension {
-  key: string;
+export type PersonaSignalLevel = "low" | "medium" | "high";
+export type PersonaSignalKey =
+  | "dramaticity"
+  | "self_correction"
+  | "persistence"
+  | "improvisation"
+  | "premature_certainty"
+  | "repetition";
+
+/** Deterministic aggregation from verified stories + P3 moments; not LLM scores. */
+export interface SemanticPersonaSignal {
+  key: PersonaSignalKey;
   label: string;
-  score: number;
-  rationale: string;
+  count: number;
+  level: PersonaSignalLevel;
   evidenceIds: string[];
 }
 
-export interface SemanticPersonaProfile {
-  /** Must describe this session's observed role/vibe, not an inherent model trait. */
-  label: string;
-  tagline: string;
-  dimensions: SemanticPersonaDimension[];
-  evidenceIds: string[];
+/** Second LLM pass: editorial language only. Facts stay in verified structures. */
+export interface SemanticNarration {
+  storyCards: Array<{
+    storyId: string;
+    title: string;
+    commentary?: string;
+  }>;
+  persona?: {
+    /** Must remain session-scoped, e.g. “本场表现像……”. */
+    label: string;
+    tagline: string;
+  };
 }
 
 export interface SemanticStoryPersonaReport {
-  version: 1;
+  version: 2;
   locale: AwardLocale;
   sessionId: string;
-  story?: SemanticStoryArc;
-  persona?: SemanticPersonaProfile;
+  stories: VerifiedStoryArc[];
+  personaSignals: SemanticPersonaSignal[];
+  narration?: SemanticNarration;
   insufficientEvidence?: string;
   evidenceUsed: string[];
 }

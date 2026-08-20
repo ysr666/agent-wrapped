@@ -27,6 +27,8 @@ export * from "./wrapped/wrappedReport.js";
 export * from "./wrapped/renderer.js";
 export * from "./wrapped/preference.js";
 
+export * from "./session-events/types.js";
+export * from "./session-events/fromMessages.js";
 export * from "./ingest/types.js";
 export * from "./ingest/dsh.js";
 export * from "./ingest/dshFilesystem.js";
@@ -42,6 +44,8 @@ export * from "./review/runner.js";
 export * from "./semantic/types.js";
 export * from "./semantic/evidence.js";
 export * from "./semantic/prompt.js";
+export * from "./semantic/storyMiner.js";
+export * from "./semantic/persona.js";
 export * from "./semantic/storyPersona.js";
 export * from "./semantic/openaiCompatible.js";
 export * from "./semantic/renderer.js";
