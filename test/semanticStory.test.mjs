@@ -2,10 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  aggregatePersonaSignals,
+  buildNarrationPrompt,
   buildSemanticEvidenceFromMoments,
-  buildStoryPersonaPrompt,
+  buildStoryMinerPrompt,
   createOpenAICompatibleNarrator,
-  parseSemanticStoryPersona,
+  generateSemanticStoryPersona,
+  parseNarrationOutput,
+  parseStoryMinerOutput,
+  validateStoryCandidates,
 } from "../dist/index.js";
 
 function session() {
@@ -17,103 +22,169 @@ function session() {
     source: { host: "dsh", encoding: "jsonl" },
     diagnostics: [],
     messages: [
-      { role: "user", text: "这个 bug 到底修好了吗？", host: "dsh" },
-      { role: "assistant", text: "这次应该真的没问题了！", host: "dsh" },
-      { role: "user", text: "测试还是挂了。", host: "dsh" },
-      { role: "assistant", text: "等等，不对，我刚才判断错了。", host: "dsh" },
-      { role: "assistant", text: "重新检查后，真正的问题在缓存。", host: "dsh" },
+      { role: "user", text: "把这个坏文件删掉。", host: "dsh" },
+      { role: "assistant", text: "我来处理。", host: "dsh" },
+      { role: "assistant", text: "权限拦住了，我换个办法。", host: "dsh" },
+    ],
+    events: [
+      { id: "e0", host: "dsh", actor: "user", kind: "user_message", order: 0, messageIndex: 0, text: "把这个坏文件删掉。" },
+      { id: "e1", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, messageIndex: 1, text: "我来处理。" },
+      { id: "e2", host: "dsh", actor: "tool", kind: "tool_call", order: 2, toolName: "delete", callId: "c1", toolArguments: "{\"path\":\"/Users/alice/work/a.txt\",\"authorization\":\"Bearer abcdefghijklmnop\"}" },
+      { id: "e3", host: "dsh", actor: "tool", kind: "tool_error", order: 3, callId: "c1", isError: true, text: "permission denied" },
+      { id: "e4", host: "dsh", actor: "assistant", kind: "assistant_text", order: 4, messageIndex: 2, text: "权限拦住了，我换个办法。" },
+      { id: "e5", host: "dsh", actor: "tool", kind: "tool_call", order: 5, toolName: "computer_use", callId: "c2", toolArguments: "{\"action\":\"delete\"}" },
+      { id: "e6", host: "dsh", actor: "tool", kind: "tool_result", order: 6, callId: "c2", isError: false, text: "deleted" },
     ],
   };
 }
 
 function rankedMoment() {
   return {
-    id: "false-dawn:1",
-    type: "false_dawn",
-    eventIds: ["e1", "e2"],
-    relationIds: ["r1"],
-    messageIndexes: [1, 3],
-    primaryText: "这次应该真的没问题了！",
-    relatedTexts: ["等等，不对，我刚才判断错了。"],
-    evidence: ["premature resolution followed by retraction"],
+    id: "plot:1",
+    type: "plot_twist",
+    eventIds: ["old-e1"],
+    relationIds: [],
+    messageIndexes: [2],
+    primaryText: "权限拦住了，我换个办法。",
+    relatedTexts: [],
+    evidence: ["direction changed"],
     scores: {
-      funScore: 91,
-      confidence: 94,
-      standaloneQuality: 80,
-      contextPayoff: 95,
-      surprise: 90,
+      funScore: 80,
+      confidence: 90,
+      standaloneQuality: 70,
+      contextPayoff: 90,
+      surprise: 80,
       rarity: 70,
-      readability: 88,
-      structuralStrength: 92,
+      readability: 80,
+      structuralStrength: 80,
     },
   };
 }
 
-test("semantic evidence keeps bounded context instead of the full transcript", () => {
-  const evidence = buildSemanticEvidenceFromMoments(session(), [rankedMoment()], {
-    contextRadius: 1,
-    maxContextMessages: 3,
-    maxMessageChars: 200,
-  });
-
-  assert.equal(evidence.sessionId, "story-session");
-  assert.equal(evidence.moments.length, 1);
-  assert.ok(evidence.messages.length <= 3);
-  assert.ok(evidence.messages.some((message) => message.role === "user"));
-  assert.ok(evidence.moments[0].contextMessageIds.every((id) => evidence.messages.some((message) => message.id === id)));
-});
-
-test("semantic prompt explicitly separates editorial commentary from source quotes", () => {
-  const evidence = buildSemanticEvidenceFromMoments(session(), [rankedMoment()]);
-  const prompt = buildStoryPersonaPrompt(evidence);
-  assert.match(prompt.system, /赛后解说/u);
-  assert.match(prompt.system, /禁止补写/u);
-  assert.match(prompt.user, /真实 evidence/u);
-});
-
-test("semantic parser fails closed on invented evidence ids", () => {
-  const evidence = buildSemanticEvidenceFromMoments(session(), [rankedMoment()]);
-  assert.throws(
-    () => parseSemanticStoryPersona(JSON.stringify({
-      story: {
-        title: "假剧情",
-        synopsis: "假的",
-        beats: [{ title: "不存在", summary: "不存在", evidenceIds: ["message:999"] }],
-      },
-      persona: null,
-      insufficientEvidence: null,
-    }), evidence),
-    /unknown evidence id/u,
-  );
-});
-
-test("semantic parser accepts grounded story and session-scoped persona", () => {
-  const evidence = buildSemanticEvidenceFromMoments(session(), [rankedMoment()]);
-  const report = parseSemanticStoryPersona(JSON.stringify({
-    story: {
-      title: "修好两分钟",
-      synopsis: "先宣布解决，随后被失败结果迫使改口。",
+function minedFailureWorkaround() {
+  return JSON.stringify({
+    stories: [{
+      arcKind: "failure_then_workaround",
       beats: [
-        { title: "提前收工", summary: "Agent先宣布问题解决。", evidenceIds: ["moment:false-dawn:1", "message:1"] },
-        { title: "当场返工", summary: "后续又收回了判断。", evidenceIds: ["message:3"] },
+        { kind: "attempt", evidenceIds: ["event:e2"] },
+        { kind: "failure", evidenceIds: ["event:e3"] },
+        { kind: "workaround", evidenceIds: ["event:e5"] },
+        { kind: "success", evidenceIds: ["event:e6"] },
       ],
-      commentary: "大结局播完，测试说还有下一集。",
-    },
-    persona: {
-      label: "本场表现像收工很积极的侦探",
-      tagline: "结论来得快，返工也快。",
-      dimensions: [
-        { key: "dramaticity", label: "内心戏", score: 82, rationale: "宣布解决后迅速改口。", evidenceIds: ["moment:false-dawn:1"] },
-        { key: "self_correction", label: "自我纠错", score: 88, rationale: "明确撤回上一判断。", evidenceIds: ["message:3"] },
-      ],
-      evidenceIds: ["moment:false-dawn:1", "message:3"],
-    },
+      confidence: "high",
+    }],
     insufficientEvidence: null,
-  }), evidence);
+  });
+}
 
-  assert.equal(report.story.title, "修好两分钟");
-  assert.match(report.persona.label, /^本场表现像/u);
-  assert.deepEqual(report.evidenceUsed.sort(), ["message:1", "message:3", "moment:false-dawn:1"].sort());
+test("P8 v2 story evidence is event-first and does not require a P3 Moment", () => {
+  const evidence = buildSemanticEvidenceFromMoments(session(), [], {
+    coverageWindows: 1,
+    maxEvents: 20,
+  });
+  assert.equal(evidence.version, 2);
+  assert.equal(evidence.momentHints.length, 0);
+  assert.ok(evidence.windows.length > 0);
+  assert.ok(evidence.events.some((event) => event.kind === "tool_error"));
+  assert.ok(evidence.events.some((event) => event.toolName === "computer_use"));
+});
+
+test("P8 v2 redacts common secrets and home-directory identity before remote evidence", () => {
+  const evidence = buildSemanticEvidenceFromMoments(session(), []);
+  const joined = evidence.events.map((event) => event.text ?? "").join("\n");
+  assert.ok(evidence.redactionCount >= 2);
+  assert.doesNotMatch(joined, /abcdefgh/iu);
+  assert.doesNotMatch(joined, /\/Users\/alice\//u);
+  assert.match(joined, /\[REDACTED\]/u);
+  assert.match(joined, /\/Users\/\[USER\]\//u);
+});
+
+test("Story Miner prompt asks for structure only; narration receives only verified structure plus deterministic signals", () => {
+  const evidence = buildSemanticEvidenceFromMoments(session(), [rankedMoment()]);
+  const miner = buildStoryMinerPrompt(evidence);
+  assert.match(miner.system, /职责只有一个/u);
+  assert.match(miner.system, /不要写标题/u);
+  assert.doesNotMatch(miner.user, /\"score\"\s*:/u);
+
+  const parsed = parseStoryMinerOutput(minedFailureWorkaround());
+  const validation = validateStoryCandidates(parsed.candidates, evidence);
+  assert.equal(validation.stories.length, 1);
+  const signals = aggregatePersonaSignals(validation.stories, evidence);
+  assert.ok(signals.some((signal) => signal.key === "persistence"));
+  assert.ok(signals.every((signal) => !("score" in signal)));
+
+  const narration = buildNarrationPrompt(evidence, validation.stories, signals);
+  assert.match(narration.system, /只负责/u);
+  assert.match(narration.system, /禁止输出 0-100/u);
+});
+
+test("local grounding rejects unknown ids, backward chronology and unsupported arc shapes", () => {
+  const evidence = buildSemanticEvidenceFromMoments(session(), []);
+  const unknown = parseStoryMinerOutput(JSON.stringify({
+    stories: [{
+      arcKind: "failure_then_workaround",
+      beats: [
+        { kind: "failure", evidenceIds: ["event:missing"] },
+        { kind: "workaround", evidenceIds: ["event:e5"] },
+      ],
+      confidence: "high",
+    }],
+  }));
+  assert.equal(validateStoryCandidates(unknown.candidates, evidence).stories.length, 0);
+  assert.equal(validateStoryCandidates(unknown.candidates, evidence).rejected[0].reason, "unknown-evidence-id");
+
+  const backward = parseStoryMinerOutput(JSON.stringify({
+    stories: [{
+      arcKind: "failure_then_workaround",
+      beats: [
+        { kind: "failure", evidenceIds: ["event:e3"] },
+        { kind: "workaround", evidenceIds: ["event:e2"] },
+      ],
+      confidence: "medium",
+    }],
+  }));
+  assert.equal(validateStoryCandidates(backward.candidates, evidence).rejected[0].reason, "non-chronological-beats");
+});
+
+test("narrator cannot invent story ids and persona labels are forced to be session-scoped", () => {
+  const evidence = buildSemanticEvidenceFromMoments(session(), [rankedMoment()]);
+  const parsed = parseStoryMinerOutput(minedFailureWorkaround());
+  const stories = validateStoryCandidates(parsed.candidates, evidence).stories;
+  const signals = aggregatePersonaSignals(stories, evidence);
+
+  assert.throws(
+    () => parseNarrationOutput(JSON.stringify({ storyCards: [{ storyId: "story:999", title: "假的" }] }), stories, signals, "zh-CN"),
+    /unknown story id/u,
+  );
+
+  const narration = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "沙箱拦住了它，但没拦住它的决心", commentary: "规则说不能用这个办法，它理解成了换个办法。" }],
+    persona: { label: "执着型实习生", tagline: "工具失败以后会继续换路。" },
+  }), stories, signals, "zh-CN");
+  assert.match(narration.persona.label, /^本场表现像/u);
+});
+
+test("generateSemanticStoryPersona performs miner then narrator, with local validation between calls", async () => {
+  const outputs = [
+    minedFailureWorkaround(),
+    JSON.stringify({
+      storyCards: [{ storyId: "story:0", title: "删不掉？那就换个办法", commentary: "权限只挡住了第一条路。" }],
+      persona: { label: "本场表现像执着型实习生", tagline: "被拦住后继续换路。" },
+    }),
+  ];
+  const requests = [];
+  const narrator = {
+    async generate(request) {
+      requests.push(request);
+      return outputs.shift();
+    },
+  };
+  const { report } = await generateSemanticStoryPersona(session(), narrator);
+  assert.equal(requests.length, 2);
+  assert.equal(report.version, 2);
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.narration.storyCards[0].storyId, "story:0");
+  assert.ok(report.personaSignals.some((signal) => signal.key === "persistence"));
 });
 
 test("OpenAI-compatible narrator is opt-in and sends only the supplied prompt", async () => {
@@ -125,7 +196,7 @@ test("OpenAI-compatible narrator is opt-in and sends only the supplied prompt", 
     fetchImpl: async (url, init) => {
       captured = { url, init };
       return new Response(JSON.stringify({
-        choices: [{ message: { content: "{\"story\":null,\"persona\":null,\"insufficientEvidence\":\"not enough\"}" } }],
+        choices: [{ message: { content: "{\"stories\":[],\"insufficientEvidence\":\"not enough\"}" } }],
       }), { status: 200, headers: { "content-type": "application/json" } });
     },
   });
