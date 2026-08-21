@@ -22,6 +22,7 @@ export * from "./awards/types.js";
 export * from "./awards/awardComposer.js";
 export * from "./composer/types.js";
 export * from "./composer/wrappedComposer.js";
+export * from "./composer/renderer.js";
 export * from "./presentation/localization.js";
 export * from "./presentation/repeatedPattern.js";
 export * from "./wrapped/types.js";

@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from "node:process";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { generateComposedWrapped } from "./composer/wrappedComposer.js";
+import { renderComposedWrappedText } from "./composer/renderer.js";
+import { loadDshSessions } from "./ingest/dshFilesystem.js";
 import type { PresentationLocale } from "./presentation/localization.js";
 import { reviewEvaluationCase } from "./review/reviewer.js";
 import {
@@ -18,6 +22,8 @@ import {
 import { CURRENT_REVIEW_PROTOCOL_VERSION, DEFAULT_REVIEW_LOCALE } from "./review/protocol.js";
 import { computeReviewProgress, loadReviewWorkspace, resolveReviewWorkspacePath } from "./review/workspace.js";
 import type { ReviewIO, ReviewWorkspaceProgress } from "./review/types.js";
+import { createOpenAICompatibleNarratorFromEnv } from "./semantic/openaiCompatible.js";
+import type { SemanticNarrator } from "./semantic/types.js";
 
 interface ParsedArgs {
   command?: string;
@@ -33,6 +39,10 @@ export interface RunCliOptions {
   stdout?: CliTextOutput;
   stderr?: CliTextOutput;
   reviewIO?: ReviewIO;
+  /** Test/local integration seam. Production CLI resolves explicit AGENT_WRAPPED_LLM_* settings. */
+  semanticNarrator?: SemanticNarrator;
+  /** Test seam; production CLI reads DSH artifacts through the normal read-only loader. */
+  dshSessionLoader?: typeof loadDshSessions;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -106,10 +116,11 @@ function out(target: CliTextOutput, text = ""): void {
 }
 
 function helpText(): string {
-  return `Agent Wrapped — local review runner
+  return `Agent Wrapped — local review + final highlight inspector
 
 Usage:
   agent-wrapped dsh [--latest 30] [--root PATH] [--store PATH] [--locale zh-CN|en]
+  agent-wrapped wrapped [--latest 1] [--root PATH] [--locale zh-CN|en] [--json]
   agent-wrapped review [--store PATH] [--session ID] [--all] [--locale zh-CN|en]
   agent-wrapped calibration [--store PATH] [--json]
   agent-wrapped status [--store PATH] [--json]
@@ -129,6 +140,17 @@ DSH options:
   --locale LOCALE   bind a new workspace to zh-CN (default) or en;
                     existing workspace locale is preserved when omitted
 
+Final Wrapped inspection:
+  --latest N        newest sessions to compose (default 1)
+  --session-hashes H inspect a frozen local subset
+  --max-cards N     final card cap (default 5, hard-capped at 5)
+  --top-moments N   local Moment hints supplied to P8 (default 6)
+  --scores          include entertainment/confidence scores
+  --diagnostics     include candidate/suppression counts
+  --json            emit structured final reports plus rendered text
+  Requires explicit AGENT_WRAPPED_LLM_BASE_URL and AGENT_WRAPPED_LLM_MODEL;
+  AGENT_WRAPPED_LLM_API_KEY is optional for local endpoints.
+
 Review options:
   --session ID      review one specific session
   --all             continue through all incomplete sessions
@@ -140,6 +162,99 @@ Storage:
                     default: $AGENT_WRAPPED_HOME/review-workspace.json
                     fallback: ~/.agent-wrapped/review-workspace.json
 `;
+}
+
+function localSessionHash(sessionId: string): string {
+  return createHash("sha256").update(sessionId).digest("hex").slice(0, 12);
+}
+
+async function commandWrapped(
+  args: ParsedArgs,
+  stdout: CliTextOutput,
+  stderr: CliTextOutput,
+  options: RunCliOptions,
+): Promise<number> {
+  const latest = numberFlag(args, "latest", 1);
+  const root = stringFlag(args, "root");
+  const sessionIdHashes = sessionHashesFlag(args, "session-hashes");
+  const locale = parseLocale(stringFlag(args, "locale"), DEFAULT_REVIEW_LOCALE);
+  const maxCards = numberFlag(args, "max-cards", 5);
+  const topMoments = numberFlag(args, "top-moments", 6);
+  const sessions = await (options.dshSessionLoader ?? loadDshSessions)({
+    maxSessions: latest,
+    root,
+    sessionIdHashes,
+    includeVisibleReasoning: booleanFlag(args, "reasoning"),
+  });
+  if (sessionIdHashes && sessions.length !== sessionIdHashes.length) {
+    throw new Error(
+      `Fixed DSH Wrapped selection expected ${sessionIdHashes.length} sessions but matched ${sessions.length}.`,
+    );
+  }
+  if (sessions.length === 0) throw new Error("No readable DSH session was found.");
+  const narrator = options.semanticNarrator ?? createOpenAICompatibleNarratorFromEnv().narrator;
+  const generated: Array<{
+    session: typeof sessions[number];
+    result?: Awaited<ReturnType<typeof generateComposedWrapped>>;
+    error?: string;
+  }> = [];
+  for (const [index, session] of sessions.entries()) {
+    if (sessions.length > 1) out(stderr, `Wrapped ${index + 1}/${sessions.length}: ${localSessionHash(session.id)}`);
+    try {
+      generated.push({
+        session,
+        result: await generateComposedWrapped(session, narrator, {
+          wrapped: { locale },
+          semantic: { locale, topMoments },
+          composer: { maxCards },
+        }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      generated.push({ session, error: message.slice(0, 300) });
+    }
+  }
+  const failed = generated.filter((entry) => entry.error).length;
+
+  if (booleanFlag(args, "json")) {
+    out(stdout, JSON.stringify({
+      version: 1,
+      locale,
+      sessions: generated.map((entry) => ({
+        sessionHash: localSessionHash(entry.session.id),
+        title: entry.session.title,
+        error: entry.error,
+        report: entry.result ? { ...entry.result.report, sessionId: localSessionHash(entry.session.id) } : undefined,
+        rendered: entry.result ? renderComposedWrappedText(entry.result.report, entry.result.semanticEvidence, {
+          includeScores: booleanFlag(args, "scores"),
+        }).trimEnd() : undefined,
+      })),
+    }, null, 2));
+    return failed === 0 ? 0 : 1;
+  }
+
+  for (const [index, entry] of generated.entries()) {
+    if (generated.length > 1) {
+      if (index > 0) out(stdout);
+      out(stdout, `=== ${entry.session.title ?? localSessionHash(entry.session.id)} ===`);
+    }
+    if (!entry.result) {
+      out(stdout, `生成失败：${entry.error ?? "unknown error"}`);
+      continue;
+    }
+    stdout.write(renderComposedWrappedText(entry.result.report, entry.result.semanticEvidence, {
+      includeScores: booleanFlag(args, "scores"),
+    }));
+    if (booleanFlag(args, "diagnostics")) {
+      const diagnostics = entry.result.report.diagnostics;
+      out(
+        stdout,
+        `候选：P4 ${diagnostics.sourceAwards} · P8 ${diagnostics.sourceStories} · ` +
+          `合并 episode ${diagnostics.groupedStoryEpisodes} · 抑制 ${diagnostics.suppressed.length}`,
+      );
+    }
+  }
+  return failed === 0 ? 0 : 1;
 }
 
 function progressObject(progress: ReviewWorkspaceProgress): Record<string, number> {
@@ -377,6 +492,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         return 0;
       case "dsh":
         return await commandDsh(args, stdout);
+      case "wrapped":
+        return await commandWrapped(args, stdout, stderr, options);
       case "review":
         return await commandReview(args, stdout, options.reviewIO);
       case "calibration":

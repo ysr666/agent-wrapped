@@ -112,7 +112,7 @@ function markdownAwardBody(award: Award, locale: WrappedReport["locale"]): strin
   return texts.map((text) => localizedQuoteMarkdown(text, locale)).join("\n>\n> →\n>\n");
 }
 
-function plainAwardBody(award: Award, locale: WrappedReport["locale"]): string {
+export function renderAwardPlainBody(award: Award, locale: WrappedReport["locale"]): string {
   if (award.sourceType === "repeated_pattern") return repeatedPlainBody(award, locale);
 
   const texts = chronologicalTexts(award);
@@ -180,7 +180,7 @@ export function renderWrappedText(
     );
   } else {
     for (const award of report.awards) {
-      lines.push("", `${award.emoji} ${award.title}`, plainAwardBody(award, report.locale));
+      lines.push("", `${award.emoji} ${award.title}`, renderAwardPlainBody(award, report.locale));
       if (includeScores) lines.push(scoreLine(report, award));
     }
   }

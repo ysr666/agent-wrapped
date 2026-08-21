@@ -98,6 +98,24 @@ P7 protocol v2 binds judgments to both the review protocol and presentation loca
 
 See `docs/p7-local-review-runner.md` for the review protocol and storage behavior.
 
+## Inspect the final composed Wrapped
+
+After configuring the explicit semantic endpoint shown below, inspect the final
+P4 + P8 card set rather than the two candidate routes separately:
+
+```bash
+agent-wrapped wrapped --latest 1
+agent-wrapped wrapped --latest 30 --scores --diagnostics
+agent-wrapped wrapped --latest 200 \
+  --session-hashes 0123456789ab,abcdef012345 \
+  --json
+```
+
+This command is read-only and does not create a transcript store. Plain output
+shows only selected cards and safe chronological story evidence. JSON output
+uses a local session-id hash; tool arguments, raw results and stdout/stderr are
+never added to semantic evidence or rendered output.
+
 ## Experimental P8: story + session persona
 
 P8 accepts that “剧情 + 人格” is genuinely semantic, but it does not hand the entire transcript to an LLM and hope for a funny summary. It is an Entertainment Candidate Pool input, not a required Session Replay card.

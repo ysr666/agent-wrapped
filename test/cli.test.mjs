@@ -162,3 +162,92 @@ test("P7 CLI rejects malformed fixed-session hash selectors before ingestion", a
   assert.equal(code, 1);
   assert.match(stderr.value(), /12-character lowercase SHA-256 prefixes/u);
 });
+
+test("CLI renders the final composed Wrapped and supports privacy-safe JSON inspection", async () => {
+  const session = {
+    id: "cli-composed-session",
+    title: "CLI Composed Session",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "本轮排查闭环完成。" },
+      { role: "user", host: "dsh", text: "等下，又有一个 bug 要看。" },
+    ],
+    events: [
+      { id: "close", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "本轮排查闭环完成。" },
+      { id: "reopen", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "等下，又有一个 bug 要看。" },
+    ],
+  };
+  const dshSessionLoader = async (options) => {
+    assert.equal(options.maxSessions, 1);
+    return [session];
+  };
+  const semanticNarrator = { async generate() { return "{}"; } };
+  const stdout = capture();
+  const stderr = capture();
+  const code = await runCli(["wrapped", "--latest", "1", "--scores", "--diagnostics"], {
+    stdout: stdout.output,
+    stderr: stderr.output,
+    dshSessionLoader,
+    semanticNarrator,
+  });
+  assert.equal(code, 0);
+  assert.equal(stderr.value(), "");
+  assert.match(stdout.value(), /本场 Agent Wrapped/u);
+  assert.match(stdout.value(), /宣布收尾以后，工作又来了/u);
+  assert.match(stdout.value(), /好玩度/u);
+  assert.match(stdout.value(), /候选：P4 0 · P8 1/u);
+
+  const json = capture();
+  assert.equal(await runCli(["wrapped", "--latest", "1", "--json"], {
+    stdout: json.output,
+    stderr: stderr.output,
+    dshSessionLoader,
+    semanticNarrator,
+  }), 0);
+  const parsed = JSON.parse(json.value());
+  assert.match(parsed.sessions[0].sessionHash, /^[a-f0-9]{12}$/u);
+  assert.equal(parsed.sessions[0].report.sessionId, parsed.sessions[0].sessionHash);
+  assert.equal(parsed.sessions[0].report.cards.length, 1);
+  assert.match(parsed.sessions[0].rendered, /本场剧情/u);
+});
+
+test("CLI keeps inspecting later sessions when one semantic call fails", async () => {
+  const failing = {
+    id: "cli-failing-session",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "本轮排查闭环完成。" },
+      { role: "user", host: "dsh", text: "等下，又有一个 bug 要看。" },
+    ],
+    events: [
+      { id: "close", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "本轮排查闭环完成。" },
+      { id: "reopen", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "等下，又有一个 bug 要看。" },
+    ],
+  };
+  const empty = {
+    id: "cli-empty-session",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [{ role: "user", host: "dsh", text: "hello" }],
+    events: [{ id: "user", host: "dsh", actor: "user", kind: "user_message", order: 0, messageIndex: 0, text: "hello" }],
+  };
+  const stdout = capture();
+  const stderr = capture();
+  const code = await runCli(["wrapped", "--latest", "2"], {
+    stdout: stdout.output,
+    stderr: stderr.output,
+    dshSessionLoader: async () => [failing, empty],
+    semanticNarrator: { async generate() { throw new Error("endpoint timeout"); } },
+  });
+
+  assert.equal(code, 1);
+  assert.match(stderr.value(), /Wrapped 1\/2/u);
+  assert.match(stderr.value(), /Wrapped 2\/2/u);
+  assert.match(stdout.value(), /生成失败：Error: endpoint timeout/u);
+  assert.match(stdout.value(), /这场暂时没有强到值得上榜的名场面/u);
+});

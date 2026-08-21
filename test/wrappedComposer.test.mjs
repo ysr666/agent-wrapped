@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   composeWrappedCards,
   generateComposedWrapped,
+  renderComposedWrappedText,
 } from "../dist/index.js";
 
 function scores(funScore = 90) {
@@ -172,6 +173,12 @@ test("Wrapped Composer groups repeated arcs by episode, never by beat count", ()
   assert.equal(grouped.cards[0].storyIds.length, 2);
   assert.match(grouped.cards[0].title, /× 2/u);
   assert.match(grouped.cards[0].commentary, /2 次大结局/u);
+  const rendered = renderComposedWrappedText(grouped, evidence, { includeScores: true });
+  assert.match(rendered, /宣布收尾以后，工作又来了 × 2/u);
+  assert.match(rendered, /第 1 幕/u);
+  assert.match(rendered, /第 2 幕/u);
+  assert.match(rendered, /赛后解说：一个 session，2 次大结局/u);
+  assert.match(rendered, /好玩度 89 · 置信度 82/u);
 
   const fourBeatStory = {
     ...stories[0],
@@ -191,6 +198,41 @@ test("Wrapped Composer groups repeated arcs by episode, never by beat count", ()
   );
   assert.equal(single.cards[0].type, "story");
   assert.equal(single.cards[0].episodeCount, 1);
+});
+
+test("composed renderer never prints raw tool payload text", () => {
+  const session = {
+    id: "safe-tool-render",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "call", host: "dsh", actor: "assistant", kind: "tool_call", order: 0, toolName: "bash", toolCategory: "mutation" },
+      { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 1, toolName: "bash", outcome: "failure", exitCode: 1 },
+    ],
+  };
+  const story = {
+    id: "story:safe",
+    windowId: "window:safe",
+    arcKind: "reversal",
+    beats: [
+      { kind: "attempt", evidenceIds: ["event:call"] },
+      { kind: "failure", evidenceIds: ["event:result"] },
+    ],
+    evidenceIds: ["event:call", "event:result"],
+    confidence: "high",
+  };
+  const evidence = semanticEvidence(session.id, [
+    { id: "event:call", order: 0, actor: "assistant", kind: "tool_call", toolName: "bash", toolCategory: "mutation", text: "SOURCE_SENTINEL" },
+    { id: "event:result", order: 1, actor: "tool", kind: "tool_result", toolName: "bash", outcome: "failure", exitCode: 1, text: "RESULT_SENTINEL" },
+  ]);
+  const report = composeWrappedCards(session, awardReport(), semanticReport(session.id, [story]), evidence);
+  const rendered = renderComposedWrappedText(report, evidence);
+
+  assert.match(rendered, /bash \(mutation\)/u);
+  assert.match(rendered, /bash \(failure, exit 1\)/u);
+  assert.doesNotMatch(rendered, /SOURCE_SENTINEL|RESULT_SENTINEL/u);
 });
 
 test("Wrapped Composer does not force filler cards or an unsupported persona", () => {

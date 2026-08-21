@@ -49,11 +49,13 @@ function levelLabel(level: "low" | "medium" | "high", zh: boolean): string {
 }
 
 function safeEventExcerpt(event: SemanticEvidenceBundle["events"][number]): string | undefined {
-  if (event.text) return clip(event.text);
-  if (!event.toolName) return undefined;
-  const details = [event.toolCategory, event.outcome, event.exitCode === undefined ? undefined : `exit ${event.exitCode}`]
-    .filter((value): value is string => value !== undefined);
-  return `${event.toolName}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
+  if (event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error") {
+    if (!event.toolName) return undefined;
+    const details = [event.toolCategory, event.outcome, event.exitCode === undefined ? undefined : `exit ${event.exitCode}`]
+      .filter((value): value is string => value !== undefined);
+    return `${event.toolName}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
+  }
+  return event.text ? clip(event.text) : undefined;
 }
 
 export function renderSemanticStoryPersonaText(

@@ -73,6 +73,11 @@ export interface WrappedComposerOptions {
   maxStoryCards?: number;
 }
 
+export interface ComposedWrappedRenderOptions {
+  /** Scores stay hidden in share/review output unless explicitly requested. */
+  includeScores?: boolean;
+}
+
 export interface GenerateComposedWrappedOptions {
   wrapped?: CreateWrappedReportOptions;
   semantic?: GenerateSemanticStoryPersonaOptions;
