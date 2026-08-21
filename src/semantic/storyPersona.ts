@@ -43,7 +43,7 @@ function optionalBoundedText(value: unknown, path: string, maxChars: number): st
 }
 
 function hiddenStateClaim(text: string): boolean {
-  return /(?:心里|内心|暗自|故意|偷偷|动机|甩锅|假装|明知|in (?:its|his|her) (?:head|mind)|inner thought|secretly|intentionally|wanted to|pretend|blame)/iu.test(text);
+  return /(?:心里|内心|暗自|故意|偷偷|动机|甩锅|假装|明知|(?:才|终于|突然)?想起|(?:才|终于|突然)?意识到|in (?:its|his|her) (?:head|mind)|inner thought|secretly|intentionally|wanted to|pretend|blame)/iu.test(text);
 }
 
 function unsupportedUserCausality(text: string): boolean {
@@ -94,6 +94,7 @@ export function parseNarrationOutput(
   const root = object(parsed);
   if (!root) throw new Error("Semantic narrator response is not a JSON object.");
   const storyIds = new Set(stories.map((story) => story.id));
+  const seenStoryIds = new Set<string>();
   const storyCards: SemanticNarration["storyCards"] = [];
   if (root.storyCards !== undefined && root.storyCards !== null) {
     if (!Array.isArray(root.storyCards) || root.storyCards.length > stories.length) {
@@ -104,11 +105,19 @@ export function parseNarrationOutput(
       if (!entry) throw new Error(`Semantic narrator returned invalid storyCards[${index}].`);
       const storyId = boundedText(entry.storyId, `storyCards[${index}].storyId`, 80);
       if (!storyIds.has(storyId)) throw new Error(`Semantic narrator referenced unknown story id: ${storyId}`);
-      if (storyCards.some((card) => card.storyId === storyId)) throw new Error(`Semantic narrator duplicated story id: ${storyId}`);
+      if (seenStoryIds.has(storyId)) throw new Error(`Semantic narrator duplicated story id: ${storyId}`);
+      seenStoryIds.add(storyId);
+      const title = boundedText(entry.title, `storyCards[${index}].title`, 100);
+      const commentary = optionalBoundedText(entry.commentary, `storyCards[${index}].commentary`, 260);
+      if (hiddenStateClaim(title) || unsupportedUserCausality(title)) continue;
       storyCards.push({
         storyId,
-        title: boundedText(entry.title, `storyCards[${index}].title`, 100),
-        commentary: optionalBoundedText(entry.commentary, `storyCards[${index}].commentary`, 260),
+        title,
+        ...(
+          commentary && !hiddenStateClaim(commentary) && !unsupportedUserCausality(commentary)
+            ? { commentary }
+            : {}
+        ),
       });
     }
   }

@@ -292,6 +292,7 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.match(narration.system, /赛后大赏，不是审核报告/u);
   assert.match(narration.system, /区别于 story title\/commentary/u);
   assert.match(narration.system, /用户不催就不干活/u);
+  assert.match(narration.system, /时间顺序上的反差/u);
   assert.doesNotMatch(narration.user, /一个 Bug，三次大结局|收工很积极的侦探/u);
   assert.match(narration.user, /"storyId": "story:0"/u);
   assert.doesNotMatch(narration.user, /"id": "event:e0"|"id": "event:e1"/u);
@@ -812,6 +813,40 @@ test("narrator cannot invent story ids and persona labels are forced to be sessi
     persona: { label: "本场表现像抢跑报喜员", tagline: "每次修完都立刻宣胜，又被证据叫回现场。" },
   }), stories, selfCorrectionSignals, "zh-CN");
   assert.equal(distinctMetaphor.persona?.label, "本场表现像抢跑报喜员");
+
+  const unsafeCommentary = parseNarrationOutput(JSON.stringify({
+    storyCards: [{
+      storyId: "story:0",
+      title: "用户点名后立刻补测试",
+      commentary: "UI 改得欢，运行时全靠用户骂一骂才动。",
+    }],
+  }), stories, signals, "zh-CN");
+  assert.equal(unsafeCommentary.storyCards[0].title, "用户点名后立刻补测试");
+  assert.equal(unsafeCommentary.storyCards[0].commentary, undefined);
+
+  const inventedMemory = parseNarrationOutput(JSON.stringify({
+    storyCards: [{
+      storyId: "story:0",
+      title: "UI 测完，运行期漏了",
+      commentary: "用户一提醒，才想起还要测运行期。",
+    }],
+  }), stories, signals, "zh-CN");
+  assert.equal(inventedMemory.storyCards[0].title, "UI 测完，运行期漏了");
+  assert.equal(inventedMemory.storyCards[0].commentary, undefined);
+
+  const unsafeTitle = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "全靠用户催才肯继续工作" }],
+  }), stories, signals, "zh-CN");
+  assert.equal(unsafeTitle.storyCards.length, 0, "composer will use its deterministic arc-title fallback");
+
+  const safeChronology = parseNarrationOutput(JSON.stringify({
+    storyCards: [{
+      storyId: "story:0",
+      title: "用户点名后立刻补测试",
+      commentary: "前一秒只验 UI，下一秒回头补运行时。",
+    }],
+  }), stories, signals, "zh-CN");
+  assert.equal(safeChronology.storyCards[0].commentary, "前一秒只验 UI，下一秒回头补运行时。");
 });
 
 test("routine tool trajectories stay verified locally but do not become Wrapped story/persona cards", async () => {
