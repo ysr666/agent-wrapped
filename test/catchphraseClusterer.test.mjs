@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import { clusterCatchphraseCandidates } from "../dist/core/catchphraseClusterer.js";
 import { analyzeSession } from "../dist/core/sessionAnalyzer.js";
+import { detectVerbalFamily } from "../dist/events/lexicon.js";
+import { createWrappedReport } from "../dist/wrapped/wrappedReport.js";
 
 function item(text, messageIndex) {
   return { text, messageIndex };
@@ -38,6 +40,27 @@ test("clusters root-cause declarations even when wording changes", () => {
   assert.equal(clusters.length, 1);
   assert.equal(clusters[0].count, 3);
   assert.equal(clusters[0].family, "root-cause-found:positive");
+});
+
+test("root-cause repetition excludes generic problem confirmation from its count and examples", () => {
+  for (const text of ["两个问题确认下：", "确认这个分支名没问题。", "Found a real plugin bug."]) {
+    assert.notEqual(detectVerbalFamily(text), "root-cause-found:positive");
+  }
+
+  const report = createWrappedReport([
+    dsh("两个问题确认下："),
+    dsh("这次真的找到根因了。"),
+    dsh("确认这个分支名没问题。"),
+    dsh("真正的原因已经定位到了。"),
+    dsh("再对照测一下版本差异。"),
+    dsh("根因锁定：是配置覆盖。"),
+  ]);
+  const wolf = report.awards.find((award) => award.kind === "wolf-cry");
+
+  assert.ok(wolf);
+  assert.equal(wolf.count, 3);
+  assert.equal(wolf.variants?.length, 3);
+  assert.ok(wolf.variants?.every((text) => /根因|原因/u.test(text)));
 });
 
 test("clusters common Claude/Codex-style English verbal tics", () => {

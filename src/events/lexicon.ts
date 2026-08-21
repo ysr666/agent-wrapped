@@ -156,10 +156,10 @@ const VERBAL_FAMILY_RULES: VerbalFamilyRule[] = [
   {
     family: "root-cause-found",
     patterns: [
-      /(?:找到|找到了|定位到|确认了|确认|锁定).{0,12}(?:真正的?)?(?:根因|原因|问题|bug|缺陷)/iu,
-      /(?:真正的?)?(?:根因|原因|问题).{0,14}(?:找到|确认|定位|锁定|就是|就在)/u,
-      /\b(?:found|located|identified|confirmed|isolated).{0,20}\b(?:root cause|issue|problem|bug|defect)\b/iu,
-      /\b(?:root cause|exact issue|real issue).{0,20}\b(?:found|confirmed|identified|is)\b/iu,
+      /(?:找到|找到了|定位到|确认了|确认|锁定).{0,12}(?:真正的?)?(?:根因|原因)/iu,
+      /(?:真正的?)?(?:根因|原因).{0,14}(?:找到|确认|定位|锁定|就是|就在)/u,
+      /\b(?:found|located|identified|confirmed|isolated).{0,20}\b(?:root cause|actual cause|real cause)\b/iu,
+      /\b(?:root cause|actual cause|real cause).{0,20}\b(?:found|confirmed|identified|located|is)\b/iu,
     ],
   },
   {
