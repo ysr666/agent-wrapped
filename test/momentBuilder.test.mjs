@@ -68,6 +68,56 @@ test("P2 composes celebration then reversal into a false-dawn moment", () => {
   assert.match(falseDawns[0].relatedTexts[0], /不对|判断错/u);
 });
 
+test("P2 does not mistake an unrelated command error for a retraction", () => {
+  const graph = buildMomentGraph([
+    dsh("修复完成、测试全绿、分支已推送。"),
+    dsh("继续执行合并后的收尾。"),
+    dsh("刚才的报错只是本地切换被占用挡了一下，远端状态正确。"),
+  ]);
+  const moments = buildMoments(graph);
+
+  assert.equal(ofType(moments, "false_dawn").length, 0);
+  assert.equal(ofType(moments, "plot_twist").length, 0);
+});
+
+test("P2 does not mistake hitting an internal error for a celebration", () => {
+  const graph = buildMomentGraph([
+    dsh("第一次调用命中了内部错误。"),
+    dsh("同样的错误稳定复现，说明不是网络偶发。"),
+  ]);
+  const moments = buildMoments(graph);
+
+  assert.equal(ofType(moments, "false_dawn").length, 0);
+});
+
+test("P2 does not turn a technical clarification or bare wait into a highlight", () => {
+  const graph = buildMomentGraph([
+    dsh("Wait — check how the setting renders."),
+    dsh("issue #109 不是新增工具，而是增加一个参数。"),
+  ]);
+  const moments = buildMoments(graph);
+
+  assert.equal(ofType(moments, "one_liner").length, 0);
+  assert.equal(ofType(moments, "plot_twist").length, 0);
+});
+
+test("P2 does not turn a technical root-cause refinement into a plot twist", () => {
+  const graph = buildMomentGraph([
+    dsh("同样的错误稳定复现，说明不是网络偶发，而是 fixture 触发了内部问题。"),
+    dsh("后端 key 需要精确匹配：不是旧格式，而是新的配置格式。"),
+  ]);
+  const moments = buildMoments(graph);
+
+  assert.equal(ofType(moments, "plot_twist").length, 0);
+});
+
+test("P2 does not turn a regex fragment with punctuation into a quote", () => {
+  const graph = buildMomentGraph([dsh("发现一个细节：`(?!")]);
+  const moments = buildMoments(graph);
+
+  assert.equal(ofType(moments, "one_liner").length, 0);
+});
+
 test("P2 builds plot twists and three-step correction arcs", () => {
   const graph = buildMomentGraph([
     dsh("我已经确认，根因就是配置。"),

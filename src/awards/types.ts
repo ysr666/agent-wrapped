@@ -44,6 +44,7 @@ export type AwardRejectionReason =
   | "not-shareable-repetition"
   | "duplicate-award-kind"
   | "overlaps-selected-moment"
+  | "overlaps-selected-episode"
   | "overlaps-selected-visible-evidence"
   | "award-limit";
 

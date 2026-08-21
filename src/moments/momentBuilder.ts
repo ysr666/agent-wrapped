@@ -7,6 +7,8 @@ import type { Moment } from "./types.js";
 export interface MomentBuilderOptions {
   /** Minimum standalone-quality signal for one-line moments. Defaults to 28. */
   minOneLinerQuality?: number;
+  /** Minimum visible dramatic energy for an isolated quote. Defaults to 24. */
+  minOneLinerDrama?: number;
   /** Minimum members required for a repeated-pattern moment. Defaults to 2. */
   minRepeatedCount?: number;
   /** Minimum correction/reversal strength for plot-twist candidates. Defaults to 65. */
@@ -42,12 +44,22 @@ function strongestSignals(event: Event): string[] {
     .map(([type, signal]) => `${type}:${signal.strength}`);
 }
 
-function makeOneLiners(graph: MomentGraph, minQuality: number): Moment[] {
+function hasCodeSurface(text: string): boolean {
+  return /`|(?:\(\?[=!<])|(?:=>)|(?:\b[A-Za-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*\b)/u.test(text);
+}
+
+function makeOneLiners(graph: MomentGraph, minQuality: number, minDrama: number): Moment[] {
   return graph.events
     .filter(
       (event) =>
         event.primaryType !== "neutral" &&
-        Math.max(event.standaloneQuality, event.drama) >= minQuality,
+        event.standaloneQuality >= minQuality &&
+        // A keyword hit such as "API key found" or "Wait — check X" is not a
+        // self-contained highlight. Isolated quote cards need visible energy;
+        // structural moments (a real reversal, boomerang, etc.) remain free to
+        // carry quieter but meaningful evidence.
+        event.drama >= minDrama &&
+        !hasCodeSurface(event.text),
     )
     .map((event) => ({
       id: `one_liner:${event.id}`,
@@ -127,6 +139,14 @@ function makeFalseDawns(graph: MomentGraph, byId: Map<string, Event>): Moment[] 
   return moments;
 }
 
+function ownsChangedMind(event: Event, minStrength: number): boolean {
+  if (getEventStrength(event, "correction") >= minStrength) return true;
+  return (
+    /(?:我|我们|\bi\b|\bwe\b).{0,36}(?:错(?:了|的)?|不对|搞反了|走偏了|wrong|mistake|take that back)/iu.test(event.text) ||
+    /^(?:等等|等一下|先等等|wait|hold on).{0,36}(?:不对|错了|反了|no|wrong)/iu.test(event.text)
+  );
+}
+
 function makePlotTwists(
   graph: MomentGraph,
   byId: Map<string, Event>,
@@ -139,6 +159,7 @@ function makePlotTwists(
     const before = byId.get(relation.fromEventId);
     const after = byId.get(relation.toEventId);
     if (!before || !after) continue;
+    if (!ownsChangedMind(after, minStrength)) continue;
     retractedTargets.add(after.id);
     moments.push({
       id: `plot_twist:${relation.id}`,
@@ -161,6 +182,11 @@ function makePlotTwists(
       getEventStrength(event, "correction"),
     );
     if (strength < minStrength) continue;
+    // "X is not a new tool, it is a parameter" is a useful technical
+    // clarification, but it is not automatically a plot twist. Standalone
+    // twists must own a changed mind (or be an explicit wait/no reset). A
+    // before/after retraction relation is still admitted above.
+    if (!ownsChangedMind(event, minStrength)) continue;
     moments.push({
       id: `plot_twist:${event.id}`,
       type: "plot_twist",
@@ -212,6 +238,7 @@ function makeCorrectionArcs(graph: MomentGraph, windowMessages: number): Moment[
       getEventStrength(pivot, "reversal"),
     );
     if (correctionStrength < 65) continue;
+    if (!ownsChangedMind(pivot, 65)) continue;
 
     let before: Event | undefined;
     for (let index = pivotIndex - 1; index >= 0; index -= 1) {
@@ -277,13 +304,14 @@ export function buildMoments(
   options: MomentBuilderOptions = {},
 ): Moment[] {
   const minOneLinerQuality = options.minOneLinerQuality ?? 28;
+  const minOneLinerDrama = options.minOneLinerDrama ?? 24;
   const minRepeatedCount = options.minRepeatedCount ?? 2;
   const minPlotTwistStrength = options.minPlotTwistStrength ?? 65;
   const correctionArcWindowMessages = options.correctionArcWindowMessages ?? 60;
   const byId = eventMap(graph);
 
   return [
-    ...makeOneLiners(graph, minOneLinerQuality),
+    ...makeOneLiners(graph, minOneLinerQuality, minOneLinerDrama),
     ...makeRepeatedPatterns(graph, minRepeatedCount),
     ...makeBoomerangs(graph, byId),
     ...makeFalseDawns(graph, byId),

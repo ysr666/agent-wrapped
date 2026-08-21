@@ -71,6 +71,18 @@ test("P4 does not invent awards when the session has no strong moment", () => {
   assert.match(renderWrappedText(report), /没有强到值得上榜/u);
 });
 
+test("P4 leaves ordinary technical progress off the highlight reel", () => {
+  const report = createWrappedReport([
+    dsh("API key 找到了。"),
+    dsh("Wait — check how the setting renders."),
+    dsh("issue #109 不是新增工具，而是增加一个参数。"),
+    dsh("修复完成、测试全绿、分支已推送。"),
+    dsh("刚才的报错只是本地切换被占用挡了一下，远端状态正确。"),
+  ]);
+
+  assert.equal(report.awards.length, 0);
+});
+
 test("P4 supports English presentation without changing original transcript text", () => {
   const report = createWrappedReport(
     [

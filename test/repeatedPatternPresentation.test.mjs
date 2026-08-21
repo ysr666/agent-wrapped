@@ -11,7 +11,8 @@ test("imperative 'Wait for ...' is not classified as a wait-reset verbal tic", (
   assert.equal(detectVerbalFamily("Wait for the release workflow to complete."), undefined);
   assert.equal(detectEventSignals("Wait for the release workflow to complete.").confusion, undefined);
   assert.equal(detectVerbalFamily("Wait — critical: check main first."), "wait-reset:positive");
-  assert.ok(detectEventSignals("Wait — critical: check main first.").confusion);
+  assert.equal(detectEventSignals("Wait — critical: check main first.").confusion, undefined);
+  assert.ok(detectEventSignals("Wait — no, that diagnosis is wrong.").confusion);
 });
 
 test("wait-reset repetition is presented as one tic with a count and examples", () => {

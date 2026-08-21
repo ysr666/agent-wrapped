@@ -103,20 +103,84 @@ function isRepeatedPattern(moment: RankedMoment): boolean {
   return moment.type === "repeated_pattern";
 }
 
+function isStructuralStoryMoment(moment: RankedMoment): boolean {
+  return ["boomerang", "false_dawn", "plot_twist", "correction_arc"].includes(moment.type);
+}
+
+const STRUCTURAL_ANCHOR_STOPWORDS = new Set([
+  "and", "are", "bug", "cause", "error", "fix", "fixed", "for", "from", "issue", "main", "problem", "root", "test", "tests", "that", "the", "this", "was", "with",
+]);
+
+function structuralAnchorTokens(moment: RankedMoment): Set<string> {
+  const tokens = new Set<string>();
+  for (const text of [moment.primaryText, ...moment.relatedTexts]) {
+    for (const match of text.matchAll(/[A-Za-z][A-Za-z0-9_-]{2,}/gu)) {
+      const token = match[0]?.toLocaleLowerCase();
+      if (token && !STRUCTURAL_ANCHOR_STOPWORDS.has(token)) tokens.add(token);
+    }
+  }
+  return tokens;
+}
+
+function messageSpanDistance(left: number[], right: number[]): number {
+  if (left.length === 0 || right.length === 0) return Number.POSITIVE_INFINITY;
+  const leftStart = Math.min(...left);
+  const leftEnd = Math.max(...left);
+  const rightStart = Math.min(...right);
+  const rightEnd = Math.max(...right);
+  if (leftStart <= rightEnd && rightStart <= leftEnd) return 0;
+  return Math.min(Math.abs(rightStart - leftEnd), Math.abs(leftStart - rightEnd));
+}
+
+function sharesStructuralAnchor(left: RankedMoment, right: RankedMoment): boolean {
+  if (messageSpanDistance(left.messageIndexes, right.messageIndexes) > 18) return false;
+  const leftTokens = structuralAnchorTokens(left);
+  const rightTokens = structuralAnchorTokens(right);
+  for (const token of leftTokens) if (rightTokens.has(token)) return true;
+  return false;
+}
+
 function isShareableRepeatedPattern(moment: RankedMoment): boolean {
   if (!isRepeatedPattern(moment)) return true;
-  // Named verbal families are already constrained by the local event layer
-  // (for example wait-reset or root-cause-found). For an unclassified exact or
-  // fuzzy repeat, require a compact human-readable phrase before promoting it
-  // to a user-facing catchphrase. This prevents Markdown separators, filenames,
-  // repeated checklist prose, and sentence-split code fragments from becoming
-  // "人格" by accident.
-  if (moment.family) return true;
+  // For an unclassified exact or fuzzy repeat, require a compact
+  // human-readable phrase before promoting it to a user-facing catchphrase.
+  // This prevents Markdown separators, filenames, repeated checklist prose,
+  // sentence-split code fragments, and routine completion notices from
+  // becoming "人格" by accident.
+  if (moment.family) {
+    const family = moment.family.split(":", 1)[0];
+    const variants = moment.variants?.length
+      ? moment.variants
+      : [moment.primaryText, ...moment.relatedTexts];
+
+    // Repeated progress reports are workflow narration, not a personality.
+    // The meaningful comic versions need an actual reset or an overconfident
+    // root-cause declaration, not merely several uses of the same analytical
+    // vocabulary.
+    if (["clarity", "progress-near-cause", "resolution-confidence", "celebration"].includes(family)) {
+      return false;
+    }
+    if (family === "wait-reset") {
+      const requiredTurns = variants.length === 1 ? 1 : 2;
+      return variants.filter((text) =>
+        /^(?:等等|等一下|先等等|wait|hold on).{0,36}(?:不对|错了|反了|怎么|奇怪|更严重|问题|no|wrong|weird|strange|seriously|actually)/iu.test(text.trim()),
+      ).length >= requiredTurns;
+    }
+    if (family === "root-cause-found") {
+      const requiredAssertions = variants.length === 1 ? 1 : 2;
+      return variants.filter((text) =>
+        /(?:找到|找到了|定位到|确认了).{0,16}(?:根因|原因|问题|bug|缺陷)|(?:根因|root cause).{0,20}(?:就是|是|找到了|确认了|located|found|is)\b|\b(?:found|located|identified|confirmed).{0,20}\b(?:root cause|issue|problem|bug|defect)\b/iu.test(text),
+      ).length >= requiredAssertions;
+    }
+    return (moment.count ?? 0) >= 3;
+  }
   if ((moment.count ?? 0) < 3) return false;
 
   const text = moment.primaryText.trim();
   if (text.length < 4 || text.length > 32) return false;
-  if (/[`|]/u.test(text)) return false;
+  if (/[`|/\\]/u.test(text)) return false;
+  if (/\b[A-Za-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*\b/u.test(text)) return false;
+  if (/^(?:(?:全部|任务|工作)?(?:已|已经)?(?:完成|搞定|结束|收尾)(?:了)?)[。！!]?$/u.test(text)) return false;
   if (/(?:^|[\s/])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?:$|[\s,，。])/u.test(text)) return false;
   const humanCharacters = (text.match(/[\p{L}\p{Script=Han}]/gu) ?? []).length;
   const visibleCharacters = (text.match(/[^\s]/gu) ?? []).length;
@@ -147,6 +211,13 @@ function overlapReason(
         return "overlaps-selected-moment";
       }
 
+      // One correction/failure pivot can be emitted as a false dawn, a
+      // boomerang and a three-step arc. Those are alternate views of one
+      // episode, not three cards for the same punchline.
+      if (isStructuralStoryMoment(candidate) && isStructuralStoryMoment(item.moment)) {
+        return "overlaps-selected-episode";
+      }
+
       // Within the same user-visible award family, strongly overlapping graph
       // structures should collapse. Across different award families, sharing a
       // line can be valuable only when both cards have genuinely different
@@ -154,6 +225,18 @@ function overlapReason(
       if (candidateKind === item.kind && overlap.containment > maxContainmentOverlap) {
         return "overlaps-selected-moment";
       }
+    }
+
+    // Structural views can describe the same local episode without sharing an
+    // exact extracted unit. A nearby, specific visible anchor (for example a
+    // package, file, or component name) is enough to make them competing
+    // versions of the same punchline.
+    if (
+      isStructuralStoryMoment(candidate) &&
+      isStructuralStoryMoment(item.moment) &&
+      sharesStructuralAnchor(candidate, item.moment)
+    ) {
+      return "overlaps-selected-episode";
     }
 
     // Event IDs can differ across P2 views of the same displayed messages.

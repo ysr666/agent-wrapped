@@ -70,7 +70,14 @@ const SIGNAL_RULES: SignalRule[] = [
     confidence: 90,
     patterns: [
       { cue: "wait-no", regex: /(?:等等|等一下|先等等).{0,20}(?:不对|错了|反了)/u },
-      { cue: "earlier-wrong", regex: /(?:之前|前面|刚才|先前).{0,28}(?:错(?:了|的)?|不对|判断有误|搞反了|走偏了|推翻)/u },
+      // Do not treat the noun phrase "刚才的报错" (a command happened to
+      // error) as the agent retracting its own earlier judgment. A reversal
+      // needs ownership of a prior conclusion, or the dedicated correction
+      // rules above will handle it instead.
+      {
+        cue: "earlier-wrong",
+        regex: /(?:(?:我|我们).{0,16}(?:之前|前面|刚才|先前).{0,16}|(?:之前|前面|刚才|先前).{0,12}(?:的)?(?:判断|结论|思路|路线|方案)).{0,16}(?:错(?:了|的)?|不对|判断有误|搞反了|走偏了|推翻)/u,
+      },
       { cue: "approach-wrong", regex: /(?:路线|方向|思路|假设|判断|结论|方案).{0,28}(?:完全)?(?:错(?:了|的)?|不对|反了|走偏了)/u },
       { cue: "not-but", regex: /(?:不是|并非).{0,40}(?:而是|其实是|真正是|才是)/u },
       { cue: "english-wrong", regex: /\b(?:i|we)\s+(?:was|were)\s+wrong\b/iu },
@@ -84,7 +91,9 @@ const SIGNAL_RULES: SignalRule[] = [
     confidence: 86,
     patterns: [
       { cue: "celebration", regex: /(?:太棒了|太好了|漂亮|完美|好家伙)/u },
-      { cue: "victory", regex: /(?:搞定了|修好了|解决了|完成了|命中|终于对了|没问题了|可以结束了)/u },
+      // "命中内部错误" means the opposite of a celebration. Keep the cue
+      // only for explicitly positive targets.
+      { cue: "victory", regex: /(?:搞定了|修好了|解决了|完成了|命中(?:预期|目标|答案|修复|根因)|终于对了|没问题了|可以结束了)/u },
       { cue: "english-celebration", regex: /\b(?:great news|perfect|fixed|solved|done|nailed it|success|we got it)\b/iu },
     ],
   },
@@ -93,10 +102,19 @@ const SIGNAL_RULES: SignalRule[] = [
     baseStrength: 54,
     confidence: 80,
     patterns: [
-      { cue: "wait", regex: /(?:等等|等一下|先等等|先等一下)/u },
+      // A bare "wait" is a common coding-worklog transition, not an
+      // emotional beat. It becomes one only when the rest of the utterance
+      // supplies a turn, surprise, or new problem.
+      {
+        cue: "wait-turn",
+        regex: /(?:等等|等一下|先等等|先等一下).{0,36}(?:不对|错了|反了|怎么|奇怪|更严重|问题)/u,
+      },
       { cue: "weird", regex: /(?:离谱|诡异|奇怪|有意思|没想到|居然|竟然)/u },
       { cue: "good-bad-news", regex: /好消息|坏消息/u },
-      { cue: "english-wait-reset", regex: /\b(?:wait|hold on)(?=\s*(?:[,!:—-]|$))/iu },
+      {
+        cue: "english-wait-turn",
+        regex: /\b(?:wait|hold on).{0,36}\b(?:no|wrong|weird|strange|problem|seriously|actually)\b/iu,
+      },
       { cue: "english-surprise", regex: /\b(?:plot twist|this is interesting|surprisingly|unexpectedly|weird)\b/iu },
     ],
   },
