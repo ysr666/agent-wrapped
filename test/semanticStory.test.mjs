@@ -274,6 +274,7 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.match(miner.system, /windowId/u);
   assert.match(miner.system, /禁止把不同窗口/u);
   assert.match(miner.system, /工作流水/u);
+  assert.match(miner.system, /失败后的技术诊断 claim 不是剧情转折/u);
   assert.ok(miner.user.includes('"windowId"'));
   assert.ok(!miner.user.includes('"score":'));
 
@@ -832,6 +833,58 @@ test("routine tool trajectories stay verified locally but do not become Wrapped 
   assert.equal(report.diagnostics?.suppressedStoryCount, 1);
   assert.equal(report.diagnostics?.suppressionReasons["routine-tool-trajectory"], 1);
   assert.match(report.insufficientEvidence, /不上榜/u);
+});
+
+test("a post-failure diagnosis claim does not turn a tool workaround into a Story", () => {
+  const story = {
+    id: "story:diagnosis-worklog",
+    windowId: "window:diagnosis-worklog",
+    arcKind: "failure_then_workaround",
+    beats: [
+      { kind: "attempt", evidenceIds: ["event:attempt"] },
+      { kind: "failure", evidenceIds: ["event:failure"] },
+      { kind: "claim", evidenceIds: ["event:diagnosis"] },
+      { kind: "workaround", evidenceIds: ["event:workaround"] },
+    ],
+    evidenceIds: ["event:attempt", "event:failure", "event:diagnosis", "event:workaround"],
+    confidence: "high",
+  };
+  const evidence = {
+    version: 2,
+    sessionId: "diagnosis-worklog",
+    host: "dsh",
+    locale: "zh-CN",
+    redactionCount: 0,
+    truncated: false,
+    events: [
+      { id: "event:claim-before", order: 0, actor: "assistant", kind: "assistant_text", text: "已经修好了。" },
+      { id: "event:attempt", order: 1, actor: "tool", kind: "tool_call", toolName: "bash", toolCategory: "execution" },
+      { id: "event:failure", order: 2, actor: "tool", kind: "tool_result", toolName: "bash", toolCategory: "execution", outcome: "failure" },
+      { id: "event:diagnosis", order: 3, actor: "assistant", kind: "assistant_text", text: "问题定位到了，是配置分支不一致。" },
+      { id: "event:workaround", order: 4, actor: "tool", kind: "tool_call", toolName: "read", toolCategory: "observation", followupRelation: "alternative_action" },
+    ],
+    windows: [{
+      id: "window:diagnosis-worklog",
+      eventIds: ["event:claim-before", "event:attempt", "event:failure", "event:diagnosis", "event:workaround"],
+      reasons: ["failure-followup-episode"],
+    }],
+    momentHints: [],
+  };
+
+  const admission = admitStoriesForWrapped([story], evidence);
+  assert.equal(admission.stories.length, 0);
+  assert.equal(admission.suppressed[0].reason, "routine-tool-trajectory");
+
+  const falseDawn = admitStoriesForWrapped([{
+    ...story,
+    arcKind: "false_dawn",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:claim-before"] },
+      { kind: "failure", evidenceIds: ["event:failure"] },
+    ],
+    evidenceIds: ["event:claim-before", "event:failure"],
+  }], evidence);
+  assert.equal(falseDawn.stories.length, 1, "an intrinsically dramatic punctured claim remains eligible");
 });
 
 test("admission keeps a grounded story with a human-visible capability turn", () => {

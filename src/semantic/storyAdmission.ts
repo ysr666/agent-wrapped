@@ -30,7 +30,6 @@ const INTRINSICALLY_DRAMATIC_ARCS = new Set<VerifiedStoryArc["arcKind"]>([
 ]);
 
 const HUMAN_VISIBLE_TURN_BEATS = new Set<VerifiedStoryArc["beats"][number]["kind"]>([
-  "claim",
   "user_pushback",
   "work_reopened",
   "capability_gap",
@@ -80,7 +79,9 @@ function hasDistinctivePushbackAnchor(
  * Keeps structural discovery broad while making the user-facing Story card
  * selective. This deliberately does not invent an LLM "fun score": it only
  * admits an already grounded story when there is an explicit turn a person can
- * recognize, or a grounded P3 dramatic moment tied to the same evidence.
+ * recognize, or a grounded P3 dramatic moment tied to the same evidence. A
+ * technical diagnosis after a failure is still a grounded claim, but it is not
+ * a turn: genuine punctured claims arrive as a dramatic arc or Moment instead.
  */
 export function admitStoriesForWrapped(
   stories: VerifiedStoryArc[],
