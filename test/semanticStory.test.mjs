@@ -812,6 +812,31 @@ test("a terse user failure immediately after an explicit victory becomes a groun
   assert.deepEqual(report.stories[0].beats.map((beat) => beat.kind), ["claim", "user_pushback"]);
 });
 
+test("direct pasted failures ground separate false dawns only with a shared technical anchor", async () => {
+  const targetSession = {
+    id: "direct-failure-cascade",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim-1", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "修好了，`qwen3-vl` 降级链已经生效。" },
+      { id: "failure-1", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "本轮运行失败 all vision models failed: openrouter/qwen/qwen3-vl-235b-a22b-instruct" },
+      { id: "claim-2", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "问题解决了，`provider.route-v2` 已刷新。" },
+      { id: "failure-2", host: "dsh", actor: "user", kind: "user_message", order: 3, messageIndex: 3, text: "请求失败：provider.route-v2 exception" },
+    ],
+  };
+  const narrator = { async generate() { return "{}"; } };
+  const { report, evidence } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(evidence.windows.filter((window) => window.reasons.includes("direct-failure-episode")).length, 2);
+  assert.equal(report.stories.length, 2);
+  assert.ok(report.stories.every((story) => story.arcKind === "false_dawn"));
+  assert.ok(report.stories.every((story) =>
+    story.beats.map((beat) => beat.kind).join(",") === "claim,failure"
+  ));
+});
+
 test("a colloquial caught-slacking callout grounds the Agent's explicit admission", async () => {
   const targetSession = {
     id: "caught-slacking",
@@ -871,13 +896,34 @@ test("ordinary negative preferences and unpaired complaints do not become storie
       { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 3, messageIndex: 3, text: "我先看看。" },
     ],
   };
+  const unrelatedFailure = {
+    ...preference,
+    id: "unrelated-direct-failure",
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "README 重写完成，`docs/readme-v2` 已推送。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "本轮运行失败：openrouter/qwen/qwen3-vl exception" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "我先看另一个 session。" },
+    ],
+  };
+  const zeroFailure = {
+    ...preference,
+    id: "zero-failure-summary",
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "修好了，`provider.route-v2` 已刷新。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "测试结果：0 failed，provider.route-v2 全部通过。" },
+    ],
+  };
 
   const preferenceResult = await generateSemanticStoryPersona(preference, narrator, { coverageWindows: 0 });
   const unpairedResult = await generateSemanticStoryPersona(unpaired, narrator, { coverageWindows: 0 });
   const interruptedResult = await generateSemanticStoryPersona(interrupted, narrator, { coverageWindows: 0 });
+  const unrelatedFailureResult = await generateSemanticStoryPersona(unrelatedFailure, narrator, { coverageWindows: 0 });
+  const zeroFailureResult = await generateSemanticStoryPersona(zeroFailure, narrator, { coverageWindows: 0 });
   assert.equal(preferenceResult.report.stories.length, 0);
   assert.equal(unpairedResult.report.stories.length, 0);
   assert.equal(interruptedResult.report.stories.length, 0);
+  assert.equal(unrelatedFailureResult.report.stories.length, 0);
+  assert.equal(zeroFailureResult.report.stories.length, 0);
 });
 
 test("verified structure survives an unavailable editorial narration call", async () => {

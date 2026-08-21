@@ -120,7 +120,44 @@ function pushbackCue(text: string | undefined): boolean {
 
 function terseNegativeReplyCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|看|选|用|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+}
+
+function directFailureReportCue(text: string | undefined): boolean {
+  if (!text || /(?:\b0\s+(?:failed|failures?|errors?)\b|all\s+tests?\s+passed|no\s+errors?|全部通过|0\s*个?失败)/iu.test(text)) return false;
+  return /(?:本轮(?:运行)?失败|(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果).{0,32}(?:失败|报错|错误|崩溃|挂了)|(?:失败|报错|错误|崩溃|挂了).{0,32}(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果)|\b(?:all\s+.{0,20}\s+failed|runtime error|request failed|tests? failed|exception)\b)/iu.test(text);
+}
+
+const SPECIFIC_TOPIC_STOPWORDS = new Set([
+  "assistant", "code", "deepseek", "error", "failed", "failure", "false", "https", "image", "images", "message", "model", "models", "request", "session", "text", "this", "tools", "true", "user", "vision", "with",
+]);
+
+function specificTopicAnchors(text: string | undefined): Set<string> {
+  const anchors = new Set<string>();
+  if (!text) return anchors;
+  for (const match of text.matchAll(/[A-Za-z][A-Za-z0-9_.:/-]{3,}/gu)) {
+    const rawToken = match[0]?.toLocaleLowerCase();
+    if (!rawToken) continue;
+    for (const candidate of [rawToken, ...rawToken.split(/[/:]/gu)]) {
+      const token = candidate.replace(/^[./:_-]+|[./:_-]+$/gu, "");
+      if (!token || token.length < 6 || SPECIFIC_TOPIC_STOPWORDS.has(token)) continue;
+      anchors.add(token);
+    }
+  }
+  return anchors;
+}
+
+function sharesSpecificTopicAnchor(left: string | undefined, right: string | undefined): boolean {
+  const rightAnchors = specificTopicAnchors(right);
+  return [...specificTopicAnchors(left)].some((leftAnchor) =>
+    [...rightAnchors].some((rightAnchor) => {
+      if (leftAnchor === rightAnchor) return true;
+      const [shorter, longer] = leftAnchor.length < rightAnchor.length
+        ? [leftAnchor, rightAnchor]
+        : [rightAnchor, leftAnchor];
+      return longer.startsWith(shorter) && /[./:_-]/u.test(longer[shorter.length] ?? "");
+    })
+  );
 }
 
 function behaviorCalloutCue(text: string | undefined): boolean {
@@ -214,7 +251,8 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
     const anchor = events[anchorIndex];
     if (!anchor) continue;
     const assistantCorrection = anchor.actor === "assistant" && correctionCue(anchor.text);
-    const userPushback = anchor.actor === "user" && pushbackCue(anchor.text);
+    const directFailureReport = anchor.actor === "user" && directFailureReportCue(anchor.text);
+    const userPushback = anchor.actor === "user" && (pushbackCue(anchor.text) || directFailureReport);
     if (!assistantCorrection && !userPushback) continue;
 
     const nearby = narrativeIndexes.filter((index) => {
@@ -244,14 +282,34 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
       }
     }
 
-    const eventIndexes = orderedUniqueIndexes(indexes);
-    if (eventIndexes.length < 2) continue;
     const previousNarrative = [...nearby].reverse().find((index) => index < anchorIndex);
     const nextNarrative = nearby.find((index) => index > anchorIndex);
     const caughtBehavior = userPushback && behaviorCalloutCue(anchor.text) &&
       nextAssistant !== undefined && nextNarrative === nextAssistant && explicitAdmissionCue(events[nextAssistant]?.text);
-    const puncturedClaim = userPushback && terseNegativeReplyCue(anchor.text) &&
-      previousAssistant !== undefined && previousNarrative === previousAssistant && strongCompletionClaimCue(events[previousAssistant]?.text);
+    let puncturedClaimIndex: number | undefined;
+    if (userPushback && previousAssistant !== undefined && previousNarrative === previousAssistant) {
+      if (directFailureReport) {
+        const previousMessageIndex = events[previousAssistant]?.messageIndex;
+        const sameAssistantTurn = [...nearby].reverse().filter((index) =>
+          index <= previousAssistant &&
+          events[index]?.actor === "assistant" &&
+          (previousMessageIndex === undefined || events[index]?.messageIndex === previousMessageIndex)
+        );
+        puncturedClaimIndex = sameAssistantTurn.find((index) =>
+          strongCompletionClaimCue(events[index]?.text) &&
+          sharesSpecificTopicAnchor(events[index]?.text, anchor.text)
+        );
+      } else if (
+        terseNegativeReplyCue(anchor.text) &&
+        strongCompletionClaimCue(events[previousAssistant]?.text)
+      ) {
+        puncturedClaimIndex = previousAssistant;
+      }
+      if (puncturedClaimIndex !== undefined) indexes.push(puncturedClaimIndex);
+    }
+    const puncturedClaim = puncturedClaimIndex !== undefined;
+    const eventIndexes = orderedUniqueIndexes(indexes);
+    if (eventIndexes.length < 2) continue;
     candidates.push({
       eventIndexes,
       score: caughtBehavior ? 24 : puncturedClaim ? 22 : 16,
@@ -260,6 +318,7 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
         assistantCorrection ? "assistant-correction" : "user-pushback",
         ...(caughtBehavior ? ["behavior-callout-episode"] : []),
         ...(puncturedClaim ? ["claim-pushback-episode"] : []),
+        ...(puncturedClaim && directFailureReport ? ["direct-failure-episode"] : []),
       ],
       coverage: false,
     });

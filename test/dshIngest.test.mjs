@@ -173,6 +173,65 @@ test("P5 tolerates a real-shaped image-only user message without inventing text"
   assert.ok(session.diagnostics.some((entry) => entry.code === "no-visible-assistant-messages"));
 });
 
+test("P5 separates DSH's injected image prompt from the human suffix and remote evidence", () => {
+  const attachmentId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const injected = `[attached image: ${attachmentId}] The current model cannot see images. To examine it, call vision_describe with attachmentIds: ["${attachmentId}"] and a specific question.`;
+  const jsonl = [
+    JSON.stringify({ type: "session", version: 0, id: "attachment-shim-session", createdAt: 1784973850091 }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 1,
+      data: {
+        id: "image-with-suffix",
+        content: [{ type: "text", text: `${injected}\n\n暂无描述？` }],
+        source: { kind: "user" },
+      },
+    }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 2,
+      data: {
+        id: "image-only-shim",
+        content: [{ type: "text", text: injected }],
+        source: { kind: "user" },
+      },
+    }),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(jsonl);
+
+  assert.deepEqual(session.messages.map((message) => message.role), ["system", "user", "system"]);
+  assert.equal(session.messages[1].text, "暂无描述？");
+  assert.equal(session.messages[0].metadata?.hostInjectedAttachmentPrompt, true);
+  assert.equal(session.messages[0].metadata?.rawObservableText, `${injected}\n\n暂无描述？`);
+  assert.equal(session.events?.filter((event) => event.kind === "user_message").length, 1);
+  assert.equal(session.events?.[0].metadata?.rawObservableText, `${injected}\n\n暂无描述？`);
+
+  const semantic = buildSemanticEvidence(session);
+  assert.deepEqual(semantic.events.flatMap((event) => event.text ? [event.text] : []), ["暂无描述？"]);
+  assert.doesNotMatch(JSON.stringify(semantic), /cannot see images|attached image|vision_describe/iu);
+});
+
+test("P5 does not strip ordinary human text that merely resembles an image limitation", () => {
+  const jsonl = [
+    JSON.stringify({ type: "session", version: 0, id: "ordinary-image-text", createdAt: 1784973850091 }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 1,
+      data: {
+        id: "human-1",
+        content: [{ type: "text", text: "The current model cannot see images." }],
+        source: { kind: "user" },
+      },
+    }),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(jsonl);
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.messages[0].role, "user");
+  assert.equal(session.messages[0].text, "The current model cannot see images.");
+});
+
 test("P5 keeps DSH host injections local without treating them as human speech", () => {
   const jsonl = [
     JSON.stringify({ type: "session", version: 0, id: "source-kind-session", createdAt: 1784973850091 }),

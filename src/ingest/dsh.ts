@@ -87,6 +87,26 @@ function nestedVisibleText(value: unknown): string {
   return output.join("\n").trim();
 }
 
+const DSH_IMAGE_ATTACHMENT_PROMPT = /^\s*(\[attached image:\s*(sha256:[a-f0-9]{16,})\]\s*The current model cannot see images\.\s*To examine it,\s*call vision_describe with attachmentIds:\s*\[\s*"\2"\s*\]\s*and a specific question\.)\s*/iu;
+
+function splitHostInjectedAttachmentPrompts(text: string): {
+  humanText: string;
+  injectedText?: string;
+} {
+  let humanText = text;
+  const injected: string[] = [];
+  while (true) {
+    const match = DSH_IMAGE_ATTACHMENT_PROMPT.exec(humanText);
+    if (!match?.[0] || !match[1]) break;
+    injected.push(match[1]);
+    humanText = humanText.slice(match[0].length);
+  }
+  return {
+    humanText: humanText.trim(),
+    injectedText: injected.length > 0 ? injected.join("\n") : undefined,
+  };
+}
+
 function eventSeq(record: JsonObject, fallback: number): string {
   const seq = record.seq;
   return typeof seq === "number" && Number.isFinite(seq) ? String(seq) : String(fallback);
@@ -164,14 +184,50 @@ function appendUserMessage(
 ): void {
   const blocks = textBlocks(data.content, new Set(["text"]));
   if (blocks.length === 0) return;
-  const text = blocks.map((block) => block.text).join("\n\n").trim();
-  if (!text) return;
+  const rawText = blocks.map((block) => block.text).join("\n\n").trim();
+  if (!rawText) return;
   const sourceKind = string(object(data.source)?.kind);
   // DSH persists host/plugin injections through the same `user/message`
   // envelope as human input. Keep their original text locally, but do not
   // misrepresent them as something the human said. Missing sourceKind remains
   // user for compatibility with older exports.
   const isHumanUser = sourceKind === undefined || sourceKind === "user";
+  const split = isHumanUser
+    ? splitHostInjectedAttachmentPrompts(rawText)
+    : { humanText: rawText, injectedText: undefined };
+  if (split.injectedText) {
+    const injectedMessageIndex = messages.length;
+    messages.push({
+      id: `dsh:${eventSeq(record, lineIndex)}:attachment-prompt`,
+      role: "system",
+      text: split.injectedText,
+      host: "dsh",
+      timestamp: eventTimestamp(record.time),
+      metadata: {
+        dshEventType: "user/message",
+        dshSeq: record.seq,
+        dshMessageId: string(data.id),
+        sourceKind,
+        hostInjectedAttachmentPrompt: true,
+        rawObservableText: rawText,
+      },
+    });
+    events.push({
+      id: `dsh:${eventSeq(record, lineIndex)}:attachment-prompt-event`,
+      ...eventBase(record, lineIndex),
+      actor: "system",
+      kind: "unknown",
+      messageIndex: injectedMessageIndex,
+      text: split.injectedText,
+      metadata: {
+        sourceKind,
+        hostInjectedAttachmentPrompt: true,
+        rawObservableText: rawText,
+      },
+    });
+  }
+  const text = split.humanText;
+  if (!text) return;
   const messageIndex = messages.length;
   messages.push({
     id: `dsh:${eventSeq(record, lineIndex)}:user`,

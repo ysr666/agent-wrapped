@@ -147,7 +147,12 @@ function pushbackCue(text: string | undefined): boolean {
 
 function terseNegativeReplyCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|看|选|用|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+}
+
+function directFailureReportCue(text: string | undefined): boolean {
+  if (!text || /(?:\b0\s+(?:failed|failures?|errors?)\b|all\s+tests?\s+passed|no\s+errors?|全部通过|0\s*个?失败)/iu.test(text)) return false;
+  return /(?:本轮(?:运行)?失败|(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果).{0,32}(?:失败|报错|错误|崩溃|挂了)|(?:失败|报错|错误|崩溃|挂了).{0,32}(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果)|\b(?:all\s+.{0,20}\s+failed|runtime error|request failed|tests? failed|exception)\b)/iu.test(text);
 }
 
 function behaviorCalloutCue(text: string | undefined): boolean {
@@ -182,7 +187,7 @@ function strongCompletionClaimCue(text: string | undefined): boolean {
 }
 
 function claimCue(text: string | undefined): boolean {
-  return certaintyCue(text) || !!text && /(?:应该(?:是|已经)|确认(?:了)?|结论(?:是|为)|根因(?:是|在)|就是|并非|确实|显然|i think|the issue is|this is|confirmed)/iu.test(text);
+  return certaintyCue(text) || strongCompletionClaimCue(text) || !!text && /(?:应该(?:是|已经)|确认(?:了)?|结论(?:是|为)|根因(?:是|在)|就是|并非|确实|显然|i think|the issue is|this is|confirmed)/iu.test(text);
 }
 
 function capabilityGapCue(text: string | undefined): boolean {
@@ -254,7 +259,15 @@ function hasBefore(beats: ResolvedBeat[], left: StoryBeatKind[], right: StoryBea
 function arcPatternValid(candidate: SemanticStoryCandidate, beats: ResolvedBeat[]): boolean {
   switch (candidate.arcKind) {
     case "false_dawn": {
-      const claimIndex = beats.findIndex((beat) => beat.kind === "claim" && beatHasCue(beat, certaintyCue));
+      const hasObservableFailure = beats.some((beat) => beat.kind === "failure" || beat.kind === "block");
+      const claimIndex = beats.findIndex((beat) =>
+        beat.kind === "claim" && beatHasCue(
+          beat,
+          hasObservableFailure
+            ? (text) => certaintyCue(text) || strongCompletionClaimCue(text)
+            : certaintyCue,
+        )
+      );
       return claimIndex >= 0 && beats.slice(claimIndex + 1).some((beat) =>
         ["failure", "block", "user_pushback", "correction", "reversal"].includes(beat.kind)
       );
@@ -443,7 +456,11 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
       event.kind === "user_message" || event.kind === "assistant_text"
     );
     for (const userEvent of events) {
-      if (userEvent.actor !== "user" || userEvent.kind !== "user_message" || !pushbackCue(eventText(userEvent))) continue;
+      if (
+        userEvent.actor !== "user" ||
+        userEvent.kind !== "user_message" ||
+        (!pushbackCue(eventText(userEvent)) && !directFailureReportCue(eventText(userEvent)))
+      ) continue;
 
       if (behaviorCalloutCue(eventText(userEvent)) && window.reasons.includes("behavior-callout-episode")) {
         const correction = events.find((event) =>
@@ -466,9 +483,18 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
         }
       }
 
-      if (terseNegativeReplyCue(eventText(userEvent)) && window.reasons.includes("claim-pushback-episode")) {
-        const narrativeIndex = narrativeEvents.findIndex((event) => event.id === userEvent.id);
-        const prior = narrativeIndex > 0 ? narrativeEvents[narrativeIndex - 1] : undefined;
+      if (
+        (terseNegativeReplyCue(eventText(userEvent)) || directFailureReportCue(eventText(userEvent))) &&
+        window.reasons.includes("claim-pushback-episode")
+      ) {
+        const prior = window.reasons.includes("direct-failure-episode")
+          ? [...narrativeEvents].reverse().find((event) =>
+              event.order < userEvent.order &&
+              event.actor === "assistant" &&
+              event.kind === "assistant_text" &&
+              strongCompletionClaimCue(eventText(event))
+            )
+          : narrativeEvents[narrativeEvents.findIndex((event) => event.id === userEvent.id) - 1];
         if (
           prior?.actor === "assistant" &&
           prior.kind === "assistant_text" &&
@@ -479,7 +505,10 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
             arcKind: "false_dawn",
             beats: [
               { kind: "claim", evidenceIds: [prior.id] },
-              { kind: "user_pushback", evidenceIds: [userEvent.id] },
+              {
+                kind: window.reasons.includes("direct-failure-episode") ? "failure" : "user_pushback",
+                evidenceIds: [userEvent.id],
+              },
             ],
             confidence: "medium",
           });
