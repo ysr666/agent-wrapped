@@ -121,7 +121,7 @@ function pushbackCue(text: string | undefined): boolean {
 
 function terseNegativeReplyCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没(?:有)?(?:修好|成功|生效|回来|显示|出现))|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
 }
 
 function directFailureReportCue(text: string | undefined): boolean {

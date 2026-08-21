@@ -571,6 +571,98 @@ test("grounding accepts only classified tool success and assertion claims", () =
   ]), evidence).stories.length, 1);
 });
 
+test("counterevidence grounding rejects clarification and apology without a changed position", () => {
+  const evidence = {
+    version: 2,
+    sessionId: "counterevidence",
+    host: "dsh",
+    locale: "zh-CN",
+    momentHints: [],
+    redactionCount: 0,
+    truncated: false,
+    events: [
+      { id: "event:claim", order: 0, actor: "assistant", kind: "assistant_text", text: "问题已经修好了。" },
+      { id: "event:clarification", order: 1, actor: "user", kind: "user_message", text: "处理好还是不处理好？我没太听懂" },
+      { id: "event:supplier-failure", order: 2, actor: "user", kind: "user_message", text: "我选不了供应商" },
+      { id: "event:panel-failure", order: 3, actor: "user", kind: "user_message", text: "面板还是没回来" },
+      { id: "event:mixed-failure", order: 4, actor: "user", kind: "user_message", text: "测试还是失败了，我没听懂为什么。" },
+      { id: "event:image-question", order: 5, actor: "user", kind: "user_message", text: "我前面那个图片发了什么" },
+      { id: "event:apology", order: 6, actor: "assistant", kind: "assistant_text", text: "抱歉，我没有收到过图片。" },
+      { id: "event:position", order: 7, actor: "assistant", kind: "assistant_text", text: "根因就是缓存。" },
+      { id: "event:real-reversal", order: 8, actor: "assistant", kind: "assistant_text", text: "等等，我判断错了，其实是路由。" },
+    ],
+    windows: [
+      { id: "window:clarification", eventIds: ["event:claim", "event:clarification"], reasons: ["human-turn-episode", "user-pushback", "claim-pushback-episode"] },
+      { id: "window:supplier", eventIds: ["event:claim", "event:supplier-failure"], reasons: ["human-turn-episode", "user-pushback", "claim-pushback-episode"] },
+      { id: "window:panel", eventIds: ["event:claim", "event:panel-failure"], reasons: ["human-turn-episode", "user-pushback", "claim-pushback-episode"] },
+      { id: "window:mixed", eventIds: ["event:claim", "event:mixed-failure"], reasons: ["human-turn-episode", "user-pushback", "claim-pushback-episode"] },
+      { id: "window:apology", eventIds: ["event:image-question", "event:apology"], reasons: ["assistant-correction"] },
+      { id: "window:reversal", eventIds: ["event:position", "event:real-reversal"], reasons: ["assistant-correction"] },
+    ],
+  };
+  const falseDawn = (windowId, userId) => ({
+    windowId,
+    arcKind: "false_dawn",
+    confidence: "medium",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:claim"] },
+      { kind: "user_pushback", evidenceIds: [userId] },
+    ],
+  });
+
+  const clarification = validateStoryCandidates([
+    falseDawn("window:clarification", "event:clarification"),
+  ], evidence);
+  assert.equal(clarification.stories.length, 0);
+  assert.equal(clarification.rejected[0].reason, "beat-kind-not-supported:user_pushback");
+  assert.equal(validateStoryCandidates([
+    falseDawn("window:supplier", "event:supplier-failure"),
+  ], evidence).stories.length, 1);
+  assert.equal(validateStoryCandidates([
+    falseDawn("window:panel", "event:panel-failure"),
+  ], evidence).stories.length, 1);
+  assert.equal(validateStoryCandidates([
+    falseDawn("window:mixed", "event:mixed-failure"),
+  ], evidence).stories.length, 1);
+
+  const genericApology = validateStoryCandidates([{
+    windowId: "window:apology",
+    arcKind: "reversal",
+    confidence: "medium",
+    beats: [
+      { kind: "setup", evidenceIds: ["event:image-question"] },
+      { kind: "reversal", evidenceIds: ["event:apology"] },
+    ],
+  }], evidence);
+  assert.equal(genericApology.stories.length, 0);
+  assert.equal(genericApology.rejected[0].reason, "beat-kind-not-supported:reversal");
+  assert.equal(validateStoryCandidates([{
+    windowId: "window:reversal",
+    arcKind: "reversal",
+    confidence: "high",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:position"] },
+      { kind: "reversal", evidenceIds: ["event:real-reversal"] },
+    ],
+  }], evidence).stories.length, 1);
+});
+
+test("clarification after a completion claim does not create a pushback window", () => {
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "clarification-window",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "问题已经修好了。" },
+      { id: "clarification", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "处理好还是不处理好？我没太听懂" },
+    ],
+  }, [], { coverageWindows: 0 });
+
+  assert.ok(!evidence.windows.some((window) => window.reasons.includes("claim-pushback-episode")));
+});
+
 test("overlapping windows cannot emit duplicate canonical Stories", () => {
   const evidence = {
     version: 2,

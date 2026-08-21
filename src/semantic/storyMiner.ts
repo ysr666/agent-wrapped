@@ -149,7 +149,19 @@ function pushbackCue(text: string | undefined): boolean {
 
 function terseNegativeReplyCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没(?:有)?(?:修好|成功|生效|回来|显示|出现))|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+}
+
+function clarificationCue(text: string | undefined): boolean {
+  return !!text && /(?:没(?:有)?(?:太)?(?:听懂|明白)|(?:什么|啥)意思|能不能(?:解释|说清楚)|不太理解|what do you mean|i don'?t understand|could you explain)/iu.test(text);
+}
+
+function claimCounterevidenceCue(text: string | undefined): boolean {
+  if (!text) return false;
+  const concreteCounterevidence = directFailureReportCue(text) || failureCue(text) || terseNegativeReplyCue(text) ||
+    /(?:^|[，。！？!?;；]\s*)(?:不对|错了|不是(?:这样|这个|的)?|你(?:搞|弄|说)错了|我说的是)|\b(?:wrong|that'?s wrong|not what i (?:asked|said|meant))\b/iu.test(text);
+  if (clarificationCue(text) && !concreteCounterevidence) return false;
+  return concreteCounterevidence;
 }
 
 function directFailureReportCue(text: string | undefined): boolean {
@@ -181,8 +193,14 @@ function explicitAdmissionCue(text: string | undefined): boolean {
   return /(?:你说得对|我的失误|没有任何借口|坏习惯|我错了|判断错|看错|做错|不该|you(?:'re| are) right|my mistake|bad habit|i was wrong|shouldn'?t have)/iu.test(text);
 }
 
+function positionChangeCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return explicitAdmissionCue(text) ||
+    /(?:判断错|看错|收回|改口|重新检查|真正(?:的)?(?:问题|根因)|承认.{0,16}(?:错|失误|坏习惯|不该)|不是.+而是|反而|原来|其实|scratch that|retract|turns out|instead|rather than)/iu.test(text);
+}
+
 function reversalCue(text: string | undefined): boolean {
-  return correctionCue(text) || (!!text && /(?:不是.+而是|反而|原来|turns out|instead|rather than)/iu.test(text));
+  return positionChangeCue(text);
 }
 
 function recoveryCue(text: string | undefined): boolean {
@@ -259,7 +277,7 @@ function beatCompatible(kind: StoryBeatKind, evidence: EvidenceEvent[], windowRe
     return evidence.some((event) => event.kind === "assistant_text" && breakdownCue(eventText(event)));
   }
   if (kind === "correction") {
-    return evidence.some((event) => event.kind === "assistant_text" && correctionCue(eventText(event)));
+    return evidence.some((event) => event.kind === "assistant_text" && positionChangeCue(eventText(event)));
   }
   if (kind === "recovery") {
     return evidence.some((event) =>
@@ -299,9 +317,12 @@ function arcPatternValid(candidate: SemanticStoryCandidate, beats: ResolvedBeat[
               : certaintyCue,
         )
       );
-      return claimIndex >= 0 && beats.slice(claimIndex + 1).some((beat) =>
-        ["failure", "block", "user_pushback", "correction", "reversal"].includes(beat.kind)
-      );
+      return claimIndex >= 0 && beats.slice(claimIndex + 1).some((beat) => {
+        if (beat.kind === "failure" || beat.kind === "block") return true;
+        if (beat.kind === "user_pushback") return beatHasCue(beat, claimCounterevidenceCue);
+        if (beat.kind === "correction" || beat.kind === "reversal") return beatHasCue(beat, positionChangeCue);
+        return false;
+      });
     }
     case "ending_then_more_work": {
       const endingIndex = beats.findIndex((beat) =>
@@ -322,7 +343,7 @@ function arcPatternValid(candidate: SemanticStoryCandidate, beats: ResolvedBeat[
     case "breakdown_then_resume":
       return hasBefore(beats, ["breakdown"], ["recovery", "attempt", "workaround", "success"]);
     case "reversal":
-      return hasBefore(beats, ["setup", "claim", "attempt"], ["reversal"]);
+      return hasBefore(beats, ["claim", "attempt"], ["reversal"]);
     case "other":
       return beats.length >= 3 && beats.some((beat) =>
         ["failure", "block", "user_pushback", "capability_gap", "breakdown", "correction", "workaround", "recovery", "reversal"].includes(beat.kind)
@@ -364,7 +385,7 @@ function relationalBeatProblem(beats: ResolvedBeat[]): string | undefined {
     if (beat.kind === "correction" || beat.kind === "reversal") {
       const validPrior = beat.kind === "correction"
         ? ["setup", "claim", "attempt", "user_pushback"]
-        : ["setup", "claim", "attempt"];
+        : ["claim", "attempt"];
       if (!prior.some((entry) => validPrior.includes(entry.kind))) {
         return `${beat.kind}-without-prior-position`;
       }
