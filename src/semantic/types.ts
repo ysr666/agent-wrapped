@@ -69,6 +69,7 @@ export interface SemanticEvidenceBundle {
 
 export type StoryArcKind =
   | "false_dawn"
+  | "ending_then_more_work"
   | "failure_then_workaround"
   | "mistake_then_correction"
   | "user_pushback_then_recovery"
@@ -84,6 +85,7 @@ export type StoryBeatKind =
   | "failure"
   | "block"
   | "user_pushback"
+  | "work_reopened"
   | "capability_gap"
   | "breakdown"
   | "correction"

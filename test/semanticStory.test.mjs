@@ -8,10 +8,12 @@ import {
   buildSemanticEvidenceFromMoments,
   buildStoryMinerPrompt,
   createOpenAICompatibleNarrator,
+  createWrappedReport,
   classifyToolOutcome,
   generateSemanticStoryPersona,
   parseNarrationOutput,
   parseStoryMinerOutput,
+  renderSemanticStoryPersonaText,
   validateStoryCandidates,
 } from "../dist/index.js";
 
@@ -837,6 +839,65 @@ test("direct pasted failures ground separate false dawns only with a shared tech
   ));
 });
 
+test("explicit session endings interrupted by new issues become truthful more-work stories", async () => {
+  const targetSession = {
+    id: "ending-that-never-ends",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "close-1", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "本轮修复已经完整闭环，等你重启实测。" },
+      { id: "reopen-1", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "等下，PR #191 又修了一个 P0 bug，你看一下。" },
+      { id: "close-2", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "v1.6.0 发布闭环完成，准备收工。" },
+      { id: "reopen-2", host: "dsh", actor: "user", kind: "user_message", order: 3, messageIndex: 3, text: "不过附件补丁被移除会不会出问题？" },
+      { id: "close-3", host: "dsh", actor: "assistant", kind: "assistant_text", order: 4, messageIndex: 4, text: "本轮排查闭环完毕。" },
+      { id: "reopen-3", host: "dsh", actor: "user", kind: "user_message", order: 5, messageIndex: 5, text: "拉取最新 main，再排查一下 bug。" },
+    ],
+  };
+  const narrator = { async generate() { return "{}"; } };
+  const { report, evidence } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(evidence.windows.filter((window) => window.reasons.includes("closure-interruption-episode")).length, 3);
+  assert.equal(report.stories.length, 3);
+  assert.ok(report.stories.every((story) => story.arcKind === "ending_then_more_work"));
+  assert.ok(report.stories.every((story) =>
+    story.beats.map((beat) => beat.kind).join(",") === "claim,work_reopened"
+  ));
+  const rendered = renderSemanticStoryPersonaText(report, evidence);
+  assert.match(rendered, /工作又来了/u);
+  assert.doesNotMatch(rendered, /用户打脸/u);
+});
+
+test("an admitted Story cannot unlock persona from unrelated unshowable repetition", async () => {
+  const targetSession = {
+    id: "ending-with-markdown-noise",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "|---|---|" },
+      { role: "assistant", host: "dsh", text: "|---|---|" },
+      { role: "assistant", host: "dsh", text: "|---|---|" },
+      { role: "assistant", host: "dsh", text: "本轮排查闭环完成。" },
+      { role: "user", host: "dsh", text: "等下，又有一个 bug 要看。" },
+    ],
+    events: [
+      { id: "close", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 3, text: "本轮排查闭环完成。" },
+      { id: "reopen", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 4, text: "等下，又有一个 bug 要看。" },
+    ],
+  };
+  const narrator = { async generate() { return "{}"; } };
+  const p3 = createWrappedReport(targetSession.messages, { includeRankedMoments: true });
+  assert.ok(p3.rankedMoments.some((moment) => moment.type === "repeated_pattern"));
+  assert.equal(p3.awards.length, 0);
+  const { report, evidence } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(report.stories.length, 1);
+  assert.equal(evidence.momentHints.length, 0);
+  assert.equal(report.personaSignals.some((signal) => signal.key === "repetition"), false);
+});
+
 test("a colloquial caught-slacking callout grounds the Agent's explicit admission", async () => {
   const targetSession = {
     id: "caught-slacking",
@@ -913,17 +974,37 @@ test("ordinary negative preferences and unpaired complaints do not become storie
       { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "测试结果：0 failed，provider.route-v2 全部通过。" },
     ],
   };
+  const ordinaryContinuation = {
+    ...preference,
+    id: "ordinary-continuation-after-close",
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "本轮排查闭环完成，等你重启。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "重启了，自审查一下。" },
+    ],
+  };
+  const neutralStatusBeforeIssue = {
+    ...preference,
+    id: "neutral-status-before-new-issue",
+    events: [
+      { id: "status", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "目前状态如下，我继续等结果。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "拉取最新 main，再排查一下 bug。" },
+    ],
+  };
 
   const preferenceResult = await generateSemanticStoryPersona(preference, narrator, { coverageWindows: 0 });
   const unpairedResult = await generateSemanticStoryPersona(unpaired, narrator, { coverageWindows: 0 });
   const interruptedResult = await generateSemanticStoryPersona(interrupted, narrator, { coverageWindows: 0 });
   const unrelatedFailureResult = await generateSemanticStoryPersona(unrelatedFailure, narrator, { coverageWindows: 0 });
   const zeroFailureResult = await generateSemanticStoryPersona(zeroFailure, narrator, { coverageWindows: 0 });
+  const ordinaryContinuationResult = await generateSemanticStoryPersona(ordinaryContinuation, narrator, { coverageWindows: 0 });
+  const neutralStatusBeforeIssueResult = await generateSemanticStoryPersona(neutralStatusBeforeIssue, narrator, { coverageWindows: 0 });
   assert.equal(preferenceResult.report.stories.length, 0);
   assert.equal(unpairedResult.report.stories.length, 0);
   assert.equal(interruptedResult.report.stories.length, 0);
   assert.equal(unrelatedFailureResult.report.stories.length, 0);
   assert.equal(zeroFailureResult.report.stories.length, 0);
+  assert.equal(ordinaryContinuationResult.report.stories.length, 0);
+  assert.equal(neutralStatusBeforeIssueResult.report.stories.length, 0);
 });
 
 test("verified structure survives an unavailable editorial narration call", async () => {

@@ -16,6 +16,7 @@ interface ResolvedBeat {
 
 const ARC_KINDS = new Set<StoryArcKind>([
   "false_dawn",
+  "ending_then_more_work",
   "failure_then_workaround",
   "mistake_then_correction",
   "user_pushback_then_recovery",
@@ -32,6 +33,7 @@ const BEAT_KINDS = new Set<StoryBeatKind>([
   "failure",
   "block",
   "user_pushback",
+  "work_reopened",
   "capability_gap",
   "breakdown",
   "correction",
@@ -155,6 +157,16 @@ function directFailureReportCue(text: string | undefined): boolean {
   return /(?:本轮(?:运行)?失败|(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果).{0,32}(?:失败|报错|错误|崩溃|挂了)|(?:失败|报错|错误|崩溃|挂了).{0,32}(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果)|\b(?:all\s+.{0,20}\s+failed|runtime error|request failed|tests? failed|exception)\b)/iu.test(text);
 }
 
+function explicitClosureClaimCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:本轮|这轮|本次|当前).{0,40}(?:完整闭环|闭环(?:完成|完毕)|收尾(?:完成|完毕))|(?:发布|发版|排查|修复).{0,32}(?:闭环|收尾).{0,12}(?:完成|完毕)|(?:完整|全部|已经|已).{0,8}(?:闭环|收尾).{0,12}(?:完成|完毕)|(?:发布|发版|合并|上线|release).{0,40}(?:准备就绪|可以发布|随时发布|ready to ship)|目标达成.{0,80}(?:已装|发布|修复|完成)|\b(?:cycle|round|release|work).{0,24}(?:wrapped up|complete|ready to ship|closed out)\b)/iu.test(text);
+}
+
+function humanReopensWorkCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:等一下|等下|等等|先别|但是|不过|对了|还有|另外).{0,80}(?:问题|bug|issue|报错|失败|不对|没(?:有|修|解决)|移除|找不到|看不到)|(?:PR\s*#?\d+|前面|刚刚|又|还有).{0,40}(?:P0|问题|bug|issue|修)|(?:拉取|检查|排查|看看|看一下|查一下).{0,32}(?:bug|问题|issue|修复)|(?:会不会|是不是|可能).{0,20}(?:出问题|有问题|bug)|\b(?:wait|hold on|one more|another).{0,40}(?:bug|issue|problem|failure|broken)\b)/iu.test(text);
+}
+
 function behaviorCalloutCue(text: string | undefined): boolean {
   if (!text) return false;
   return /(?:(?:为什么|怎么).{0,10}你.{0,24}(?:每次|总是|一直|又)|你.{0,24}(?:竟然|居然|每次|总是|一直|第一轮|刚才).{0,24}(?:没|没有|又|都)|(?:合着|所以).{0,16}你.{0,48}(?:啥也没|什么都没|根本没|只.{0,20}(?:没|没有))|你.{0,24}除了.{0,24}(?:啥也没|什么都没|没|没有)|why\s+(?:do|did)\s+you.{0,32}(?:always|keep)|you.{0,24}(?:always|kept|just|never|didn't|did not))/iu.test(text);
@@ -202,9 +214,16 @@ function hasToolOutcome(event: EvidenceEvent, outcomes: string[]): boolean {
   return (event.kind === "tool_result" || event.kind === "tool_error") && !!event.outcome && outcomes.includes(event.outcome);
 }
 
-function beatCompatible(kind: StoryBeatKind, evidence: EvidenceEvent[]): boolean {
+function beatCompatible(kind: StoryBeatKind, evidence: EvidenceEvent[], windowReasons: string[]): boolean {
   if (kind === "setup") return evidence.some((event) => event.kind === "assistant_text" || event.kind === "user_message");
-  if (kind === "claim") return evidence.some((event) => event.kind === "assistant_text" && claimCue(eventText(event)));
+  if (kind === "claim") {
+    return evidence.some((event) =>
+      event.kind === "assistant_text" && (
+        claimCue(eventText(event)) ||
+        (windowReasons.includes("closure-interruption-episode") && explicitClosureClaimCue(eventText(event)))
+      )
+    );
+  }
   if (kind === "attempt" || kind === "workaround") return evidence.some((event) => event.kind === "tool_call");
   if (kind === "failure") {
     return evidence.some((event) =>
@@ -221,7 +240,17 @@ function beatCompatible(kind: StoryBeatKind, evidence: EvidenceEvent[]): boolean
     );
   }
   if (kind === "user_pushback") {
-    return evidence.some((event) => event.kind === "user_message" && pushbackCue(eventText(event)));
+    return evidence.some((event) =>
+      event.kind === "user_message" && (
+        pushbackCue(eventText(event)) ||
+        (windowReasons.includes("closure-interruption-episode") && humanReopensWorkCue(eventText(event)))
+      )
+    );
+  }
+  if (kind === "work_reopened") {
+    return windowReasons.includes("closure-interruption-episode") && evidence.some((event) =>
+      event.kind === "user_message" && humanReopensWorkCue(eventText(event))
+    );
   }
   if (kind === "capability_gap") {
     return evidence.some((event) => event.kind === "assistant_text" && capabilityGapCue(eventText(event)));
@@ -256,21 +285,31 @@ function hasBefore(beats: ResolvedBeat[], left: StoryBeatKind[], right: StoryBea
   return beats.slice(leftIndex + 1).some((beat) => right.includes(beat.kind));
 }
 
-function arcPatternValid(candidate: SemanticStoryCandidate, beats: ResolvedBeat[]): boolean {
+function arcPatternValid(candidate: SemanticStoryCandidate, beats: ResolvedBeat[], windowReasons: string[]): boolean {
   switch (candidate.arcKind) {
     case "false_dawn": {
       const hasObservableFailure = beats.some((beat) => beat.kind === "failure" || beat.kind === "block");
       const claimIndex = beats.findIndex((beat) =>
         beat.kind === "claim" && beatHasCue(
           beat,
-          hasObservableFailure
-            ? (text) => certaintyCue(text) || strongCompletionClaimCue(text)
-            : certaintyCue,
+          windowReasons.includes("closure-interruption-episode")
+            ? explicitClosureClaimCue
+            : hasObservableFailure
+              ? (text) => certaintyCue(text) || strongCompletionClaimCue(text)
+              : certaintyCue,
         )
       );
       return claimIndex >= 0 && beats.slice(claimIndex + 1).some((beat) =>
         ["failure", "block", "user_pushback", "correction", "reversal"].includes(beat.kind)
       );
+    }
+    case "ending_then_more_work": {
+      const endingIndex = beats.findIndex((beat) =>
+        beat.kind === "claim" && beatHasCue(beat, explicitClosureClaimCue)
+      );
+      return windowReasons.includes("closure-interruption-episode") &&
+        endingIndex >= 0 &&
+        beats.slice(endingIndex + 1).some((beat) => beat.kind === "work_reopened");
     }
     case "failure_then_workaround":
       return hasBefore(beats, ["failure", "block"], ["workaround"]);
@@ -338,6 +377,7 @@ const STRUCTURAL_ANCHORS = new Set<StoryBeatKind>([
   "failure",
   "block",
   "user_pushback",
+  "work_reopened",
   "capability_gap",
   "breakdown",
   "correction",
@@ -459,7 +499,11 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
       if (
         userEvent.actor !== "user" ||
         userEvent.kind !== "user_message" ||
-        (!pushbackCue(eventText(userEvent)) && !directFailureReportCue(eventText(userEvent)))
+        (
+          !pushbackCue(eventText(userEvent)) &&
+          !directFailureReportCue(eventText(userEvent)) &&
+          !humanReopensWorkCue(eventText(userEvent))
+        )
       ) continue;
 
       if (behaviorCalloutCue(eventText(userEvent)) && window.reasons.includes("behavior-callout-episode")) {
@@ -484,10 +528,27 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
       }
 
       if (
-        (terseNegativeReplyCue(eventText(userEvent)) || directFailureReportCue(eventText(userEvent))) &&
-        window.reasons.includes("claim-pushback-episode")
+        (
+          terseNegativeReplyCue(eventText(userEvent)) ||
+          directFailureReportCue(eventText(userEvent)) ||
+          (
+            window.reasons.includes("closure-interruption-episode") &&
+            humanReopensWorkCue(eventText(userEvent))
+          )
+        ) &&
+        (
+          window.reasons.includes("claim-pushback-episode") ||
+          window.reasons.includes("closure-interruption-episode")
+        )
       ) {
-        const prior = window.reasons.includes("direct-failure-episode")
+        const prior = window.reasons.includes("closure-interruption-episode")
+          ? [...narrativeEvents].reverse().find((event) =>
+              event.order < userEvent.order &&
+              event.actor === "assistant" &&
+              event.kind === "assistant_text" &&
+              explicitClosureClaimCue(eventText(event))
+            )
+          : window.reasons.includes("direct-failure-episode")
           ? [...narrativeEvents].reverse().find((event) =>
               event.order < userEvent.order &&
               event.actor === "assistant" &&
@@ -498,15 +559,27 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
         if (
           prior?.actor === "assistant" &&
           prior.kind === "assistant_text" &&
-          strongCompletionClaimCue(eventText(prior))
+          (
+            strongCompletionClaimCue(eventText(prior)) ||
+            (
+              window.reasons.includes("closure-interruption-episode") &&
+              explicitClosureClaimCue(eventText(prior))
+            )
+          )
         ) {
           candidates.push({
             windowId: window.id,
-            arcKind: "false_dawn",
+            arcKind: window.reasons.includes("closure-interruption-episode")
+              ? "ending_then_more_work"
+              : "false_dawn",
             beats: [
               { kind: "claim", evidenceIds: [prior.id] },
               {
-                kind: window.reasons.includes("direct-failure-episode") ? "failure" : "user_pushback",
+                kind: window.reasons.includes("closure-interruption-episode")
+                  ? "work_reopened"
+                  : window.reasons.includes("direct-failure-episode")
+                    ? "failure"
+                    : "user_pushback",
                 evidenceIds: [userEvent.id],
               },
             ],
@@ -563,7 +636,7 @@ export function validateStoryCandidates(
         break;
       }
       previousOrder = Math.max(...concrete.map((entry) => entry.order));
-      if (!beatCompatible(beat.kind, concrete)) {
+      if (!beatCompatible(beat.kind, concrete, window.reasons)) {
         invalidReason = `beat-kind-not-supported:${beat.kind}`;
         break;
       }
@@ -572,7 +645,9 @@ export function validateStoryCandidates(
     }
 
     if (!invalidReason) invalidReason = relationalBeatProblem(resolvedBeats);
-    if (!invalidReason && !arcPatternValid(candidate, resolvedBeats)) invalidReason = "arc-pattern-not-supported";
+    if (!invalidReason && !arcPatternValid(candidate, resolvedBeats, window.reasons)) {
+      invalidReason = "arc-pattern-not-supported";
+    }
     if (invalidReason) {
       rejected.push({ candidateIndex, reason: invalidReason });
       return;

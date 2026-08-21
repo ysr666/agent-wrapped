@@ -20,6 +20,7 @@ export interface SemanticStoryAdmission {
 
 const INTRINSICALLY_DRAMATIC_ARCS = new Set<VerifiedStoryArc["arcKind"]>([
   "false_dawn",
+  "ending_then_more_work",
   "mistake_then_correction",
   "user_pushback_then_recovery",
   "capability_gap_then_improvisation",
@@ -30,6 +31,7 @@ const INTRINSICALLY_DRAMATIC_ARCS = new Set<VerifiedStoryArc["arcKind"]>([
 const HUMAN_VISIBLE_TURN_BEATS = new Set<VerifiedStoryArc["beats"][number]["kind"]>([
   "claim",
   "user_pushback",
+  "work_reopened",
   "capability_gap",
   "breakdown",
   "correction",

@@ -44,6 +44,7 @@ function isNarrativeTurnCandidate(candidate: WindowCandidate): boolean {
   return candidate.reasons.some((reason) =>
     reason === "human-turn-episode" ||
     reason === "user-pushback" ||
+    reason === "work-reopened" ||
     reason === "assistant-correction" ||
     reason === "assistant-certainty"
   );
@@ -126,6 +127,16 @@ function terseNegativeReplyCue(text: string | undefined): boolean {
 function directFailureReportCue(text: string | undefined): boolean {
   if (!text || /(?:\b0\s+(?:failed|failures?|errors?)\b|all\s+tests?\s+passed|no\s+errors?|全部通过|0\s*个?失败)/iu.test(text)) return false;
   return /(?:本轮(?:运行)?失败|(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果).{0,32}(?:失败|报错|错误|崩溃|挂了)|(?:失败|报错|错误|崩溃|挂了).{0,32}(?:运行|请求|调用|测试|构建|工具|模型|页面|图片|结果)|\b(?:all\s+.{0,20}\s+failed|runtime error|request failed|tests? failed|exception)\b)/iu.test(text);
+}
+
+function explicitClosureClaimCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:本轮|这轮|本次|当前).{0,40}(?:完整闭环|闭环(?:完成|完毕)|收尾(?:完成|完毕))|(?:发布|发版|排查|修复).{0,32}(?:闭环|收尾).{0,12}(?:完成|完毕)|(?:完整|全部|已经|已).{0,8}(?:闭环|收尾).{0,12}(?:完成|完毕)|(?:发布|发版|合并|上线|release).{0,40}(?:准备就绪|可以发布|随时发布|ready to ship)|目标达成.{0,80}(?:已装|发布|修复|完成)|\b(?:cycle|round|release|work).{0,24}(?:wrapped up|complete|ready to ship|closed out)\b)/iu.test(text);
+}
+
+function humanReopensWorkCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:等一下|等下|等等|先别|但是|不过|对了|还有|另外).{0,80}(?:问题|bug|issue|报错|失败|不对|没(?:有|修|解决)|移除|找不到|看不到)|(?:PR\s*#?\d+|前面|刚刚|又|还有).{0,40}(?:P0|问题|bug|issue|修)|(?:拉取|检查|排查|看看|看一下|查一下).{0,32}(?:bug|问题|issue|修复)|(?:会不会|是不是|可能).{0,20}(?:出问题|有问题|bug)|\b(?:wait|hold on|one more|another).{0,40}(?:bug|issue|problem|failure|broken)\b)/iu.test(text);
 }
 
 const SPECIFIC_TOPIC_STOPWORDS = new Set([
@@ -252,8 +263,9 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
     if (!anchor) continue;
     const assistantCorrection = anchor.actor === "assistant" && correctionCue(anchor.text);
     const directFailureReport = anchor.actor === "user" && directFailureReportCue(anchor.text);
+    const potentialWorkReopening = anchor.actor === "user" && humanReopensWorkCue(anchor.text);
     const userPushback = anchor.actor === "user" && (pushbackCue(anchor.text) || directFailureReport);
-    if (!assistantCorrection && !userPushback) continue;
+    if (!assistantCorrection && !userPushback && !potentialWorkReopening) continue;
 
     const nearby = narrativeIndexes.filter((index) => {
       const event = events[index];
@@ -263,7 +275,7 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
     let previousAssistant: number | undefined;
     let nextAssistant: number | undefined;
 
-    if (userPushback) {
+    if (userPushback || potentialWorkReopening) {
       previousAssistant = [...nearby].reverse().find((index) => index < anchorIndex && events[index]?.actor === "assistant");
       nextAssistant = nearby.find((index) => index > anchorIndex && events[index]?.actor === "assistant");
       if (previousAssistant !== undefined) indexes.push(previousAssistant);
@@ -287,7 +299,8 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
     const caughtBehavior = userPushback && behaviorCalloutCue(anchor.text) &&
       nextAssistant !== undefined && nextNarrative === nextAssistant && explicitAdmissionCue(events[nextAssistant]?.text);
     let puncturedClaimIndex: number | undefined;
-    if (userPushback && previousAssistant !== undefined && previousNarrative === previousAssistant) {
+    let closureInterruption = false;
+    if ((userPushback || potentialWorkReopening) && previousAssistant !== undefined && previousNarrative === previousAssistant) {
       if (directFailureReport) {
         const previousMessageIndex = events[previousAssistant]?.messageIndex;
         const sameAssistantTurn = [...nearby].reverse().filter((index) =>
@@ -299,6 +312,15 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
           strongCompletionClaimCue(events[index]?.text) &&
           sharesSpecificTopicAnchor(events[index]?.text, anchor.text)
         );
+      } else if (potentialWorkReopening) {
+        const previousMessageIndex = events[previousAssistant]?.messageIndex;
+        puncturedClaimIndex = [...nearby].reverse().find((index) =>
+          index <= previousAssistant &&
+          events[index]?.actor === "assistant" &&
+          (previousMessageIndex === undefined || events[index]?.messageIndex === previousMessageIndex) &&
+          explicitClosureClaimCue(events[index]?.text)
+        );
+        closureInterruption = puncturedClaimIndex !== undefined;
       } else if (
         terseNegativeReplyCue(anchor.text) &&
         strongCompletionClaimCue(events[previousAssistant]?.text)
@@ -315,10 +337,11 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
       score: caughtBehavior ? 24 : puncturedClaim ? 22 : 16,
       reasons: [
         "human-turn-episode",
-        assistantCorrection ? "assistant-correction" : "user-pushback",
+        assistantCorrection ? "assistant-correction" : closureInterruption ? "work-reopened" : "user-pushback",
         ...(caughtBehavior ? ["behavior-callout-episode"] : []),
-        ...(puncturedClaim ? ["claim-pushback-episode"] : []),
+        ...(puncturedClaim && !closureInterruption ? ["claim-pushback-episode"] : []),
         ...(puncturedClaim && directFailureReport ? ["direct-failure-episode"] : []),
+        ...(puncturedClaim && closureInterruption ? ["closure-interruption-episode"] : []),
       ],
       coverage: false,
     });
@@ -615,5 +638,14 @@ export function buildSemanticEvidence(
     locale: options.locale,
     includeRankedMoments: true,
   });
-  return buildSemanticEvidenceFromMoments(session, report.rankedMoments ?? [], options);
+  const evidence = buildSemanticEvidenceFromMoments(session, report.rankedMoments ?? [], options);
+  // Ranked P3 moments may help local window recall, but only moments that
+  // passed P3.5's showability gate may cross the semantic boundary or feed a
+  // P8 persona. Otherwise a newly admitted Story can accidentally unlock a
+  // personality signal from unrelated markdown/code repetition.
+  const showableHintIds = new Set(report.awards.map((award) => `moment:${award.momentId}`));
+  return {
+    ...evidence,
+    momentHints: evidence.momentHints.filter((hint) => showableHintIds.has(hint.id)),
+  };
 }

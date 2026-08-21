@@ -16,7 +16,7 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
         "beats 必须按真实时间顺序排列；attempt/workaround 应对应真实工具动作，correction/reversal 需要明确改口。workaround 只能引用带有 followupOfCallId、且 followupRelation 为 alternative_action 或 variant_arguments_retry 的工具调用；same_arguments_retry 与 same_tool_arguments_unknown 绝不能算 workaround。success 只能引用 outcome=success 的工具事件；outcome=observation 或 unknown 绝不是 success，且工具动作成功不等于整个用户任务完成。",
         "如果证据不足，宁可不输出故事。单纯的 tool failure→另一次 tool action 虽然可能真实，但通常只是工作流水；除非同一 story 还引用了 claim、correction/reversal、user_pushback、capability_gap、breakdown 之一，或同一证据上有 false_dawn/plot_twist/boomerang/correction_arc 的 momentHint，否则不要把它输出成剧情。",
         "真人明确点出 Agent 的行为或口癖，随后 Agent 明确认错、承认坏习惯或改口，本身就是有效的 user_pushback_then_recovery；它不需要再附带工具动作。把普通上下文标为 setup，只有真实断言/结论才标为 claim。",
-        "优先识别明确的人类可感知转折：提前庆祝→失败、误判→纠正、用户打脸→恢复、能力不足→硬变通、破防→继续干、前后反转。failure→换路只在它服务于上述转折时输出。优先检查 reasons 含 assistant-correction、user-pushback、assistant-certainty 或 moment-hint 的 window。",
+        "优先识别明确的人类可感知转折：提前庆祝→失败、宣布收尾→工作又被打开、误判→纠正、用户打脸→恢复、能力不足→硬变通、破防→继续干、前后反转。window.reasons 含 closure-interruption-episode 时，只能使用 ending_then_more_work，并把真人重新带来具体问题的事件标为 work_reopened；这不等于此前工作失败或用户打脸。failure→换路只在它服务于上述转折时输出。优先检查 reasons 含 assistant-correction、user-pushback、assistant-certainty、closure-interruption-episode 或 moment-hint 的 window。",
         "只输出 JSON。",
       ].join("\n")
     : [
@@ -27,12 +27,13 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
         "Beats must follow real chronology. attempt/workaround should map to real tool actions and correction/reversal needs explicit reversal evidence. A workaround may only cite a tool call with followupOfCallId and followupRelation=alternative_action or variant_arguments_retry; same_arguments_retry and same_tool_arguments_unknown are never workarounds. success may only cite tool events with outcome=success; outcome=observation or unknown is never success, and a successful tool action is not proof that the whole user task succeeded.",
         "If evidence is weak, emit no story. A bare tool failure followed by another tool action may be true, but it is usually worklog rather than a highlight: do not output it as a story unless the same story also cites a claim, correction/reversal, user pushback, capability gap, or breakdown, or shares evidence with a false_dawn/plot_twist/boomerang/correction_arc momentHint.",
         "A human explicitly calling out the Agent's behavior or verbal tic, followed by an explicit admission, habit acknowledgment, or correction, is a valid user_pushback_then_recovery without any tool action. Label ordinary context as setup; use claim only for a real assertion or conclusion.",
-        "Prefer clear human-visible turns: false dawn, mistake→correction, user pushback→recovery, capability gap→improvisation, breakdown→resume, and reversal. Use failure→workaround only when it serves one of those turns. Prioritize windows whose reasons contain assistant-correction, user-pushback, assistant-certainty, or moment-hint.",
+        "Prefer clear human-visible turns: false dawn, announced ending→more work, mistake→correction, user pushback→recovery, capability gap→improvisation, breakdown→resume, and reversal. For a window whose reasons include closure-interruption-episode, use only ending_then_more_work and label the human event that concretely reopens work as work_reopened; this does not mean the earlier work failed or the human disproved it. Use failure→workaround only when it serves one of those turns. Prioritize windows whose reasons contain assistant-correction, user-pushback, assistant-certainty, closure-interruption-episode, or moment-hint.",
         "Return JSON only.",
       ].join("\n");
 
   const allowedArcKinds = [
     "false_dawn",
+    "ending_then_more_work",
     "failure_then_workaround",
     "mistake_then_correction",
     "user_pushback_then_recovery",
@@ -48,6 +49,7 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
     "failure",
     "block",
     "user_pushback",
+    "work_reopened",
     "capability_gap",
     "breakdown",
     "correction",
