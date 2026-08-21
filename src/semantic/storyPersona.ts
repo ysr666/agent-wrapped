@@ -199,14 +199,13 @@ export async function generateSemanticStoryPersona(
         : "Story Miner returned no usable structured result.",
     };
   }
-  let validation = validateStoryCandidates([
+  // Local high-precision candidates are a recall floor, not an all-or-nothing
+  // fallback: a partial Miner answer must not hide another grounded episode.
+  const validation = validateStoryCandidates([
     ...mining.candidates,
     ...inferAuthorityBoundaryStoryCandidates(evidence),
+    ...inferHumanTurnStoryCandidates(evidence),
   ], evidence);
-  if (validation.stories.length === 0) {
-    const localHumanTurn = validateStoryCandidates(inferHumanTurnStoryCandidates(evidence), evidence);
-    if (localHumanTurn.stories.length > 0) validation = localHumanTurn;
-  }
   const admission = admitStoriesForWrapped(validation.stories, evidence);
   const stories = admission.stories;
   // A generic worklog trajectory must not create a personality card by itself.

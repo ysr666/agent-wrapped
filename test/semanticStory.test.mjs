@@ -1260,6 +1260,55 @@ test("direct pasted failures ground separate false dawns only with a shared tech
   ));
 });
 
+test("partial Miner output cannot hide another deterministic human-turn episode", async () => {
+  const targetSession = {
+    id: "partial-direct-failure-cascade",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim-1", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "修好了，`qwen3-vl` 降级链已经生效。" },
+      { id: "failure-1", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "本轮运行失败 all vision models failed: openrouter/qwen/qwen3-vl-235b-a22b-instruct" },
+      { id: "claim-2", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "问题解决了，`provider.route-v2` 已刷新。" },
+      { id: "failure-2", host: "dsh", actor: "user", kind: "user_message", order: 3, messageIndex: 3, text: "请求失败：provider.route-v2 exception" },
+    ],
+  };
+  const evidence = buildSemanticEvidenceFromMoments(targetSession, [], { coverageWindows: 0 });
+  const firstWindow = evidence.windows.find((window) =>
+    window.reasons.includes("direct-failure-episode") && window.eventIds.includes("event:claim-1")
+  );
+  assert.ok(firstWindow);
+  const outputs = [
+    JSON.stringify({ stories: [{
+      windowId: firstWindow.id,
+      arcKind: "false_dawn",
+      beats: [
+        { kind: "claim", evidenceIds: ["event:claim-1"] },
+        { kind: "failure", evidenceIds: ["event:failure-1"] },
+      ],
+      confidence: "high",
+    }] }),
+    JSON.stringify({
+      storyCards: [
+        { storyId: "story:0", title: "第一次刚说修好就失败" },
+        { storyId: "story:1", title: "第二次刚说解决又失败" },
+      ],
+      persona: { label: "本场表现像提前庆祝的接力选手", tagline: "两棒都在冲线前先举手。" },
+    }),
+  ];
+  const narrator = { async generate() { return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(report.stories.length, 2);
+  assert.deepEqual(report.stories.map((story) => story.evidenceIds), [
+    ["event:claim-1", "event:failure-1"],
+    ["event:claim-2", "event:failure-2"],
+  ]);
+  assert.equal(report.narration.storyCards.length, 2);
+  assert.equal(report.personaSignals.find((signal) => signal.key === "premature_certainty")?.count, 2);
+});
+
 test("explicit session endings interrupted by new issues become truthful more-work stories", async () => {
   const targetSession = {
     id: "ending-that-never-ends",
