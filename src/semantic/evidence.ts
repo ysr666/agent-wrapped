@@ -114,12 +114,33 @@ function correctionCue(text: string | undefined): boolean {
 
 function pushbackCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text);
+  return /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text) ||
+    terseNegativeReplyCue(text) || behaviorCalloutCue(text);
+}
+
+function terseNegativeReplyCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:根本|啥也|什么都).{0,24}(?:没|没有|不)|[\p{Script=Han}]{1,8}不了|(?:没|没有|无法|不能).{0,10}(?:生效|修好|改|做|测|退|看|选|用|打开|显示|找到|出现)|(?:还|还是|依然|仍然|又).{0,16}(?:在.{0,8}外面|不行|错|坏|失败|不见|没)|\b(?:can't|cannot|unable to|doesn't work|didn't work|not fixed|not working)\b|\b(?:still|again)\b.{0,24}\b(?:broken|wrong|missing|fails?|doesn't|isn't)\b/iu.test(text);
+}
+
+function behaviorCalloutCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:为什么|怎么).{0,10}你.{0,24}(?:每次|总是|一直|又)|你.{0,24}(?:竟然|居然|每次|总是|一直|第一轮|刚才).{0,24}(?:没|没有|又|都)|(?:合着|所以).{0,16}你.{0,48}(?:啥也没|什么都没|根本没|只.{0,20}(?:没|没有))|你.{0,24}除了.{0,24}(?:啥也没|什么都没|没|没有)|why\s+(?:do|did)\s+you.{0,32}(?:always|keep)|you.{0,24}(?:always|kept|just|never|didn't|did not))/iu.test(text);
 }
 
 function certaintyCue(text: string | undefined): boolean {
   if (!text) return false;
   return /(?:修好了|解决了|找到根因|问题.*明确|可以结束|没问题了|fixed|solved|root cause|done|all good)/iu.test(text);
+}
+
+function strongCompletionClaimCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:修好(?:了)?|修复(?:完成|好了)|解决(?:了|完成)|搞定(?:了)?|全部完成|没问题(?:了)?|全绿|找到(?:真正的)?根因|根因.{0,8}(?:找到|确认|锁定)|\b(?:fixed|solved|resolved|done|all green|all good|root cause found)\b)/iu.test(text);
+}
+
+function explicitAdmissionCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:你说得对|我的失误|没有任何借口|坏习惯|我错了|判断错|看错|做错|不该|you(?:'re| are) right|my mistake|bad habit|i was wrong|shouldn'?t have)/iu.test(text);
 }
 
 function eventSignal(
@@ -201,10 +222,12 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
       return !!event && withinNarrativeEpisode(anchor, anchorIndex, event, index);
     });
     const indexes = [anchorIndex];
+    let previousAssistant: number | undefined;
+    let nextAssistant: number | undefined;
 
     if (userPushback) {
-      const previousAssistant = [...nearby].reverse().find((index) => index < anchorIndex && events[index]?.actor === "assistant");
-      const nextAssistant = nearby.find((index) => index > anchorIndex && events[index]?.actor === "assistant");
+      previousAssistant = [...nearby].reverse().find((index) => index < anchorIndex && events[index]?.actor === "assistant");
+      nextAssistant = nearby.find((index) => index > anchorIndex && events[index]?.actor === "assistant");
       if (previousAssistant !== undefined) indexes.push(previousAssistant);
       if (nextAssistant !== undefined) indexes.push(nextAssistant);
     } else {
@@ -223,12 +246,20 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
 
     const eventIndexes = orderedUniqueIndexes(indexes);
     if (eventIndexes.length < 2) continue;
+    const previousNarrative = [...nearby].reverse().find((index) => index < anchorIndex);
+    const nextNarrative = nearby.find((index) => index > anchorIndex);
+    const caughtBehavior = userPushback && behaviorCalloutCue(anchor.text) &&
+      nextAssistant !== undefined && nextNarrative === nextAssistant && explicitAdmissionCue(events[nextAssistant]?.text);
+    const puncturedClaim = userPushback && terseNegativeReplyCue(anchor.text) &&
+      previousAssistant !== undefined && previousNarrative === previousAssistant && strongCompletionClaimCue(events[previousAssistant]?.text);
     candidates.push({
       eventIndexes,
-      score: 16,
+      score: caughtBehavior ? 24 : puncturedClaim ? 22 : 16,
       reasons: [
         "human-turn-episode",
         assistantCorrection ? "assistant-correction" : "user-pushback",
+        ...(caughtBehavior ? ["behavior-callout-episode"] : []),
+        ...(puncturedClaim ? ["claim-pushback-episode"] : []),
       ],
       coverage: false,
     });

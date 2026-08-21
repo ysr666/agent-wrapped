@@ -226,6 +226,33 @@ test("window recall keeps one human correction episode across tool and system no
   }], evidence).stories.length, 1);
 });
 
+test("a punctured victory claim wins a tight narrative-window budget", () => {
+  const events = [];
+  for (let index = 0; index < 5; index += 1) {
+    events.push(
+      { id: `routine-assistant-${index}`, host: "dsh", actor: "assistant", kind: "assistant_text", order: index * 2, messageIndex: index * 2, text: "我继续检查。" },
+      { id: `routine-user-${index}`, host: "dsh", actor: "user", kind: "user_message", order: index * 2 + 1, messageIndex: index * 2 + 1, text: "还是不行。" },
+    );
+  }
+  events.push(
+    { id: "victory", host: "dsh", actor: "assistant", kind: "assistant_text", order: 20, messageIndex: 20, text: "修好了 ✅，下拉现在正常。" },
+    { id: "puncture", host: "dsh", actor: "user", kind: "user_message", order: 21, messageIndex: 21, text: "我选不了供应商" },
+    { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 22, messageIndex: 22, text: "我再检查。" },
+  );
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "narrative-priority",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events,
+  }, [], { coverageWindows: 0, maxWindows: 1, maxEvents: 10 });
+
+  assert.equal(evidence.windows.length, 1);
+  assert.ok(evidence.windows[0].reasons.includes("claim-pushback-episode"));
+  assert.ok(["event:victory", "event:puncture"].every((id) => evidence.windows[0].eventIds.includes(id)));
+});
+
 test("P8 v2 keeps raw tool payloads local and sends only structural tool evidence", () => {
   const evidence = buildSemanticEvidenceFromMoments(session(), []);
   const remote = JSON.stringify(evidence);
@@ -752,6 +779,105 @@ test("explicit human behavior callout has a grounded local fallback when Miner m
   assert.equal(report.stories.length, 1);
   assert.equal(report.stories[0].beats[0].kind, "user_pushback");
   assert.equal(report.narration.storyCards[0].storyId, "story:0");
+});
+
+test("a terse user failure immediately after an explicit victory becomes a grounded false dawn", async () => {
+  const targetSession = {
+    id: "terse-false-dawn",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "修好了 ✅，供应商下拉现在可以正常使用。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "我选不了供应商" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "先看截图。" },
+    ],
+  };
+  const outputs = [
+    "{}",
+    JSON.stringify({
+      storyCards: [{ storyId: "story:0", title: "刚修好，就选不了", commentary: "庆功消息的保质期只有一条回复。" }],
+    }),
+  ];
+  const narrator = { async generate() { return outputs.shift(); } };
+  const { report, evidence } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.ok(evidence.windows.some((window) =>
+    window.reasons.includes("human-turn-episode") &&
+    ["event:claim", "event:human"].every((id) => window.eventIds.includes(id))
+  ));
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.stories[0].arcKind, "false_dawn");
+  assert.deepEqual(report.stories[0].beats.map((beat) => beat.kind), ["claim", "user_pushback"]);
+});
+
+test("a colloquial caught-slacking callout grounds the Agent's explicit admission", async () => {
+  const targetSession = {
+    id: "caught-slacking",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "搞定了，UI 折叠和现有测试都通过。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "合着你前面除了 UI 啥也没改啥也没测？" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "你说得对，之前是我偷懒了，只盯着 UI。" },
+    ],
+  };
+  const outputs = [
+    "{}",
+    JSON.stringify({
+      storyCards: [{ storyId: "story:0", title: "被当场抓到只改了 UI" }],
+    }),
+  ];
+  const narrator = { async generate() { return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.stories[0].arcKind, "user_pushback_then_recovery");
+  assert.deepEqual(report.stories[0].beats.map((beat) => beat.kind), ["user_pushback", "correction"]);
+});
+
+test("ordinary negative preferences and unpaired complaints do not become stories", async () => {
+  const narrator = { async generate() { return "{}"; } };
+  const preference = {
+    id: "negative-preference",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "修好了，页面现在可以用了。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "我不喜欢蓝色，换成红色。" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "好的，我调整配色。" },
+    ],
+  };
+  const unpaired = {
+    ...preference,
+    id: "unpaired-complaint",
+    events: [
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 0, messageIndex: 0, text: "我选不了供应商" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, messageIndex: 1, text: "我先看看。" },
+    ],
+  };
+  const interrupted = {
+    ...preference,
+    id: "interrupted-complaint",
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "修好了，页面现在可以用了。" },
+      { id: "other-user", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "先把变更清单发我。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 2, messageIndex: 2, text: "我选不了供应商" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 3, messageIndex: 3, text: "我先看看。" },
+    ],
+  };
+
+  const preferenceResult = await generateSemanticStoryPersona(preference, narrator, { coverageWindows: 0 });
+  const unpairedResult = await generateSemanticStoryPersona(unpaired, narrator, { coverageWindows: 0 });
+  const interruptedResult = await generateSemanticStoryPersona(interrupted, narrator, { coverageWindows: 0 });
+  assert.equal(preferenceResult.report.stories.length, 0);
+  assert.equal(unpairedResult.report.stories.length, 0);
+  assert.equal(interruptedResult.report.stories.length, 0);
 });
 
 test("verified structure survives an unavailable editorial narration call", async () => {
