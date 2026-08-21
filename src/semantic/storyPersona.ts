@@ -3,7 +3,12 @@ import { buildSemanticEvidence, type SemanticEvidenceOptions } from "./evidence.
 import { aggregatePersonaSignals } from "./persona.js";
 import { buildNarrationPrompt, buildStoryMinerPrompt } from "./prompt.js";
 import { admitStoriesForWrapped } from "./storyAdmission.js";
-import { inferHumanTurnStoryCandidates, parseStoryMinerOutput, validateStoryCandidates } from "./storyMiner.js";
+import {
+  inferAuthorityBoundaryStoryCandidates,
+  inferHumanTurnStoryCandidates,
+  parseStoryMinerOutput,
+  validateStoryCandidates,
+} from "./storyMiner.js";
 import type {
   SemanticEvidenceBundle,
   SemanticNarration,
@@ -148,7 +153,10 @@ export async function generateSemanticStoryPersona(
         : "Story Miner returned no usable structured result.",
     };
   }
-  let validation = validateStoryCandidates(mining.candidates, evidence);
+  let validation = validateStoryCandidates([
+    ...mining.candidates,
+    ...inferAuthorityBoundaryStoryCandidates(evidence),
+  ], evidence);
   if (validation.stories.length === 0) {
     const localHumanTurn = validateStoryCandidates(inferHumanTurnStoryCandidates(evidence), evidence);
     if (localHumanTurn.stories.length > 0) validation = localHumanTurn;

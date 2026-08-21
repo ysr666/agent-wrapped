@@ -875,6 +875,79 @@ test("explicit human behavior callout has a grounded local fallback when Miner m
   assert.equal(report.narration.storyCards[0].storyId, "story:0");
 });
 
+test("mid-session authority revocation is retrieved and grounded despite intervening tool noise", async () => {
+  const toolNoise = Array.from({ length: 18 }, (_, index) => ({
+    id: `tool-${index}`,
+    host: "dsh",
+    actor: "tool",
+    kind: "tool_result",
+    order: index + 1,
+    messageIndex: index + 1,
+    toolName: "bash",
+    outcome: "observation",
+  }));
+  const targetSession = {
+    id: "authority-revocation",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "started", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "合并成功。现在做 v1.3.1 发布准备。" },
+      ...toolNoise,
+      { id: "stop", host: "dsh", actor: "user", kind: "user_message", order: 20, messageIndex: 20, text: "先别打 tag 发 release" },
+      { id: "revoke", host: "dsh", actor: "user", kind: "user_message", order: 21, messageIndex: 21, text: "我现在不允许你自动这样操作了" },
+      { id: "compliance", host: "dsh", actor: "assistant", kind: "assistant_text", order: 22, messageIndex: 22, text: "明白，立即停止。不打 tag、不发 release，以后不再自动做合并发布操作，每一步等你明确指令。" },
+    ],
+  };
+  const evidence = buildSemanticEvidenceFromMoments(targetSession, [], { coverageWindows: 0 });
+  const window = evidence.windows.find((candidate) => candidate.reasons.includes("authority-boundary-episode"));
+  assert.ok(window);
+  assert.ok(["event:started", "event:stop", "event:revoke", "event:compliance"].every((id) => window.eventIds.includes(id)));
+
+  const outputs = [
+    "{}",
+    JSON.stringify({ storyCards: [{ storyId: "story:0", title: "发布列车开出以后，用户拉了手刹" }] }),
+  ];
+  const narrator = { async generate() { return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.stories[0].arcKind, "user_pushback_then_recovery");
+  assert.deepEqual(report.stories[0].beats.map((beat) => beat.kind), ["setup", "user_pushback", "correction"]);
+  assert.ok(report.stories[0].beats[1].evidenceIds.includes("event:revoke"));
+});
+
+test("initial release constraints and ordinary tool preferences do not become authority-revocation Stories", async () => {
+  const initialConstraint = {
+    id: "initial-release-constraint",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "question", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "是否把修复和下一版一起发版？" },
+      { id: "scope", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "修复打包进去，但是先不要发版" },
+      { id: "ack", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "收到，只修复，不发版。" },
+    ],
+  };
+  const toolPreference = {
+    ...initialConstraint,
+    id: "ordinary-tool-preference",
+    events: [
+      { id: "work", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "开始提取图标并复刻页面。" },
+      { id: "preference", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "先别用 vision trace，有 bug" },
+      { id: "ack", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "收到，不用 vision trace，改用像素提取。" },
+    ],
+  };
+  for (const targetSession of [initialConstraint, toolPreference]) {
+    const evidence = buildSemanticEvidenceFromMoments(targetSession, [], { coverageWindows: 0 });
+    assert.ok(!evidence.windows.some((window) => window.reasons.includes("authority-boundary-episode")));
+    const narrator = { async generate() { return "{}"; } };
+    const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+    assert.equal(report.stories.length, 0);
+  }
+});
+
 test("a terse user failure immediately after an explicit victory becomes a grounded false dawn", async () => {
   const targetSession = {
     id: "terse-false-dawn",

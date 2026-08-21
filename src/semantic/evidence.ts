@@ -116,7 +116,25 @@ function correctionCue(text: string | undefined): boolean {
 function pushbackCue(text: string | undefined): boolean {
   if (!text) return false;
   return /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text) ||
-    terseNegativeReplyCue(text) || behaviorCalloutCue(text);
+    terseNegativeReplyCue(text) || behaviorCalloutCue(text) || authorityBoundaryCue(text);
+}
+
+function authorityBoundaryCue(text: string | undefined): boolean {
+  if (!text) return false;
+  const explicitRevocation = /(?:(?:现在|以后|从现在起).{0,18}(?:不允许|不要|别再|不再).{0,30}(?:自动|这样操作|合并|发布|发版|release|tag|推送|push|删除|delete|提交|commit)|(?:未经|没有).{0,8}(?:允许|同意|确认).{0,24}(?:合并|发布|发版|release|tag|推送|push|删除|delete|提交|commit|操作)|\b(?:do not|don'?t|stop|not allowed).{0,36}(?:automatically|without (?:my )?(?:permission|approval)|merge|release|tag|push|delete|commit)\b)/iu;
+  const concreteCancellation = /(?:(?:算了|停下|停止|先别|不要|别再|别).{0,20}(?:改|合并|发布|发版|打\s*tag|release|推送|push|删除|delete|提交|commit)|\b(?:stop|do not|don'?t).{0,24}(?:merge|release|tag|push|delete|commit)\b)/iu;
+  return explicitRevocation.test(text) || concreteCancellation.test(text);
+}
+
+function assistantExternalActionCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:开始.{0,18}(?:合并|发布|发版|release|推送|删除|提交)|(?:合并|发布|发版|release|推送|删除|提交).{0,18}(?:成功|完成|完毕)|(?:分支|PR).{0,12}(?:已|已经).{0,8}(?:推送|创建|提交)|(?:已|已经).{0,12}(?:推送|删除|合并|发布|提交)|(?:做|进入).{0,12}(?:发布|发版|release).{0,8}(?:准备|流程)|\b(?:started|starting|merged|released|pushed|deleted|committed)\b)/iu.test(text) &&
+    !/(?:是否|要不要|还没|尚未|未(?:合并|发布|发版|推送|删除|提交)|not yet|should (?:i|we)|whether to)/iu.test(text);
+}
+
+function boundaryComplianceCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:明白|收到|好的).{0,16}(?:立即)?(?:停止|停下|不再|不会|不打|不发|不做)|(?:立即|现在).{0,8}(?:停止|停下)|(?:不|不会|不再).{0,28}(?:自动|合并|发布|发版|release|tag|推送|push|删除|delete|提交|commit)|(?:撤掉|撤回|回滚|还原).{0,24}(?:不留|删除|恢复|原样|痕迹)?|等你.{0,12}(?:明确|确认|指令)|\b(?:stopped|will not|won'?t|rolled back|reverted|waiting for (?:your )?(?:approval|instruction))\b)/iu.test(text);
 }
 
 function terseNegativeReplyCue(text: string | undefined): boolean {
@@ -262,6 +280,7 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
     const anchor = events[anchorIndex];
     if (!anchor) continue;
     const assistantCorrection = anchor.actor === "assistant" && correctionCue(anchor.text);
+    const authorityBoundary = anchor.actor === "user" && authorityBoundaryCue(anchor.text);
     const directFailureReport = anchor.actor === "user" && directFailureReportCue(anchor.text);
     const potentialWorkReopening = anchor.actor === "user" && humanReopensWorkCue(anchor.text);
     const userPushback = anchor.actor === "user" && (pushbackCue(anchor.text) || directFailureReport);
@@ -274,6 +293,35 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
     const indexes = [anchorIndex];
     let previousAssistant: number | undefined;
     let nextAssistant: number | undefined;
+
+    if (authorityBoundary) {
+      const previousAction = [...narrativeIndexes].reverse().find((index) =>
+        index < anchorIndex &&
+        anchorIndex - index <= 32 &&
+        events[index]?.actor === "assistant" &&
+        assistantExternalActionCue(events[index]?.text)
+      );
+      const compliance = narrativeIndexes.find((index) =>
+        index > anchorIndex &&
+        index - anchorIndex <= 12 &&
+        events[index]?.actor === "assistant" &&
+        boundaryComplianceCue(events[index]?.text)
+      );
+      if (previousAction !== undefined && compliance !== undefined) {
+        const consecutiveUserRun = narrativeIndexes.filter((index) =>
+          index > previousAction &&
+          index < compliance &&
+          events[index]?.actor === "user" &&
+          Math.abs(anchorIndex - index) <= 4
+        ).slice(-3);
+        candidates.push({
+          eventIndexes: orderedUniqueIndexes([previousAction, ...consecutiveUserRun, anchorIndex, compliance]),
+          score: 28,
+          reasons: ["human-turn-episode", "user-pushback", "authority-boundary-episode"],
+          coverage: false,
+        });
+      }
+    }
 
     if (userPushback || potentialWorkReopening) {
       previousAssistant = [...nearby].reverse().find((index) => index < anchorIndex && events[index]?.actor === "assistant");

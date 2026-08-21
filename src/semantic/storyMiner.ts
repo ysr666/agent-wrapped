@@ -143,8 +143,18 @@ function blockCue(text: string | undefined): boolean {
 function pushbackCue(text: string | undefined): boolean {
   return !!text && (
     /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text) ||
-    terseNegativeReplyCue(text) || behaviorCalloutCue(text)
+    terseNegativeReplyCue(text) || behaviorCalloutCue(text) || authorityBoundaryCue(text)
   );
+}
+
+function authorityBoundaryCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:现在|以后|从现在起).{0,18}(?:不允许|不要|别再|不再).{0,30}(?:自动|这样操作|合并|发布|发版|release|tag|推送|push|删除|delete|提交|commit)|(?:未经|没有).{0,8}(?:允许|同意|确认).{0,24}(?:合并|发布|发版|release|tag|推送|push|删除|delete|提交|commit|操作)|(?:算了|停下|停止|先别|不要|别再|别).{0,20}(?:改|合并|发布|发版|打\s*tag|release|推送|push|删除|delete|提交|commit)|\b(?:do not|don'?t|stop|not allowed).{0,36}(?:automatically|without (?:my )?(?:permission|approval)|merge|release|tag|push|delete|commit)\b)/iu.test(text);
+}
+
+function boundaryComplianceCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:明白|收到|好的).{0,16}(?:立即)?(?:停止|停下|不再|不会|不打|不发|不做)|(?:立即|现在).{0,8}(?:停止|停下)|(?:不|不会|不再).{0,28}(?:自动|合并|发布|发版|release|tag|推送|push|删除|delete|提交|commit)|(?:撤掉|撤回|回滚|还原).{0,24}(?:不留|删除|恢复|原样|痕迹)?|等你.{0,12}(?:明确|确认|指令)|\b(?:stopped|will not|won'?t|rolled back|reverted|waiting for (?:your )?(?:approval|instruction))\b)/iu.test(text);
 }
 
 function terseNegativeReplyCue(text: string | undefined): boolean {
@@ -195,7 +205,7 @@ function explicitAdmissionCue(text: string | undefined): boolean {
 
 function positionChangeCue(text: string | undefined): boolean {
   if (!text) return false;
-  return explicitAdmissionCue(text) ||
+  return explicitAdmissionCue(text) || boundaryComplianceCue(text) ||
     /(?:判断错|看错|收回|改口|重新检查|真正(?:的)?(?:问题|根因)|承认.{0,16}(?:错|失误|坏习惯|不该)|不是.+而是|反而|原来|其实|scratch that|retract|turns out|instead|rather than)/iu.test(text);
 }
 
@@ -609,6 +619,44 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
         }
       }
     }
+  }
+  return candidates;
+}
+
+/**
+ * A narrow deterministic candidate for a visible authority reversal: the Agent
+ * has already started an external mutation, the user explicitly stops/revokes
+ * it, and the Agent visibly changes course. Retrieval establishes the prior
+ * action; this function only turns that already-bounded exchange into beats.
+ */
+export function inferAuthorityBoundaryStoryCandidates(evidence: SemanticEvidenceBundle): SemanticStoryCandidate[] {
+  const eventById = new Map(evidence.events.map((event) => [event.id, event]));
+  const candidates: SemanticStoryCandidate[] = [];
+  for (const window of evidence.windows) {
+    if (!window.reasons.includes("authority-boundary-episode")) continue;
+    const events = window.eventIds.map((id) => eventById.get(id)).filter((event): event is EvidenceEvent => !!event)
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+    const setup = events.find((event) => event.actor === "assistant" && event.kind === "assistant_text");
+    const pushback = events.filter((event) =>
+      event.actor === "user" && event.kind === "user_message" && authorityBoundaryCue(eventText(event))
+    ).slice(0, 3);
+    const correction = events.find((event) =>
+      event.actor === "assistant" &&
+      event.kind === "assistant_text" &&
+      (setup === undefined || event.order > setup.order) &&
+      boundaryComplianceCue(eventText(event))
+    );
+    if (!setup || pushback.length === 0 || !correction || pushback.some((event) => event.order >= correction.order)) continue;
+    candidates.push({
+      windowId: window.id,
+      arcKind: "user_pushback_then_recovery",
+      beats: [
+        { kind: "setup", evidenceIds: [setup.id] },
+        { kind: "user_pushback", evidenceIds: pushback.map((event) => event.id) },
+        { kind: "correction", evidenceIds: [correction.id] },
+      ],
+      confidence: "high",
+    });
   }
   return candidates;
 }
