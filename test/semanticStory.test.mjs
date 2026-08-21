@@ -289,6 +289,8 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.match(narration.system, /只负责/u);
   assert.match(narration.system, /禁止输出 0-100/u);
   assert.match(narration.system, /赛后大赏，不是审核报告/u);
+  assert.match(narration.system, /区别于 story title\/commentary/u);
+  assert.match(narration.system, /用户不催就不干活/u);
   assert.doesNotMatch(narration.user, /一个 Bug，三次大结局|收工很积极的侦探/u);
   assert.match(narration.user, /"storyId": "story:0"/u);
   assert.doesNotMatch(narration.user, /"id": "event:e0"|"id": "event:e1"/u);
@@ -782,6 +784,33 @@ test("narrator cannot invent story ids and persona labels are forced to be sessi
   }), stories, signals, "zh-CN");
   assert.equal(hiddenState.storyCards.length, 1);
   assert.equal(hiddenState.persona, undefined);
+
+  const selfCorrectionSignals = [{
+    key: "self_correction",
+    label: "自我纠错",
+    count: 2,
+    level: "medium",
+    evidenceIds: ["event:e0", "event:e1"],
+  }];
+  const literalSignal = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "认错以后继续追查" }],
+    persona: { label: "本场表现像自我纠错小能手", tagline: "错就认，查就查。" },
+  }), stories, selfCorrectionSignals, "zh-CN");
+  assert.equal(literalSignal.storyCards.length, 1);
+  assert.equal(literalSignal.persona, undefined);
+
+  const unsupportedCausality = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "认错以后继续追查" }],
+    persona: { label: "本场表现像被抓包的实习生", tagline: "用户不吼不干活。" },
+  }), stories, selfCorrectionSignals, "zh-CN");
+  assert.equal(unsupportedCausality.storyCards.length, 1);
+  assert.equal(unsupportedCausality.persona, undefined);
+
+  const distinctMetaphor = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "两次宣布修好，两次被打回来" }],
+    persona: { label: "本场表现像抢跑报喜员", tagline: "每次修完都立刻宣胜，又被证据叫回现场。" },
+  }), stories, selfCorrectionSignals, "zh-CN");
+  assert.equal(distinctMetaphor.persona?.label, "本场表现像抢跑报喜员");
 });
 
 test("routine tool trajectories stay verified locally but do not become Wrapped story/persona cards", async () => {

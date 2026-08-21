@@ -102,6 +102,7 @@ export function buildNarrationPrompt(
         "这是赛后大赏，不是审核报告：只放大已验证 beats 之间的行为反差。不要复述完整过程、补充后续诊断、表扬态度、总结价值或写‘修复信任’之类套话。",
         "title/commentary 必须直接对应当前 story 的真实行为，不得套用通用 Bug、测试或大结局模板。",
         "persona 只能根据提供的、按底层剧情去重后的确定性行为信号起一个‘本场角色’外号和一句 tagline；禁止输出 0-100 分、把它说成模型天生人格，或编造内心、动机、故意与否。没有可靠人格表达就省略 persona。",
+        "persona 必须提供区别于 story title/commentary 的角色笑点：用有画面的角色或比喻，不要把‘自我纠错’‘提前下结论’等 signal label 加上‘助手’‘小能手’就当外号。tagline 只描述证据里重复出现的行为，不要编造‘用户不催就不干活’‘全靠用户才行动’之类因果或绝对习惯。做不到就省略 persona。",
         "persona.label 必须明确是本场表现，例如以‘本场表现像’开头。",
         "只输出 JSON。",
       ].join("\n")
@@ -112,6 +113,7 @@ export function buildNarrationPrompt(
         "This is a post-game awards show, not an audit report: amplify only the behavioral contrast between verified beats. Do not recap the full process, add later diagnoses, praise the attitude, summarize value, or use trust-restoration boilerplate.",
         "Titles and commentary must directly describe the current verified behavior; never paste a generic bug, test, or finale template.",
         "Persona may only nickname this session from deterministic, episode-deduplicated behavior signals. Never output 0-100 scores, imply an inherent model personality, or invent inner thoughts, motives, or intent. Omit persona if no grounded expression is available.",
+        "Persona must add a character joke distinct from story titles/commentary. Use a vivid role or metaphor; do not turn a signal label such as self-correction or premature certainty into a nickname by appending assistant/helper. The tagline may describe only the repeated evidenced behavior, never an invented claim that the Agent acts only because a user pushes it. Omit persona if you cannot do this.",
         "Make persona.label explicitly session-scoped.",
         "Return JSON only.",
       ].join("\n");

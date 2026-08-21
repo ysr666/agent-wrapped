@@ -46,6 +46,39 @@ function hiddenStateClaim(text: string): boolean {
   return /(?:心里|内心|暗自|故意|偷偷|动机|甩锅|假装|明知|in (?:its|his|her) (?:head|mind)|inner thought|secretly|intentionally|wanted to|pretend|blame)/iu.test(text);
 }
 
+function unsupportedUserCausality(text: string): boolean {
+  return /(?:(?:用户|人类)不[^，。！？\n]{0,12}不|(?:只有|全靠|只能靠|非得靠)[^，。！？\n]{0,12}(?:用户|人类)|(?:user|human).{0,32}(?:won't|wouldn't|doesn't).{0,24}(?:unless|until)|(?:only|entirely) because (?:the )?(?:user|human))/iu.test(text);
+}
+
+function normalizedPersonaLabel(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/^本场(?:表现)?像\s*[:：]?\s*/u, "")
+    .replace(/^this session (?:played|acted|looked) like\s*/iu, "")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+const ENGLISH_SIGNAL_LABELS: Partial<Record<SemanticPersonaSignal["key"], string[]>> = {
+  dramaticity: ["dramatic", "dramaticity"],
+  self_correction: ["selfcorrection", "selfcorrecting"],
+  persistence: ["persistence", "persistent"],
+  improvisation: ["improvisation", "improviser"],
+  premature_certainty: ["prematurecertainty", "overconfident"],
+  repetition: ["repetition", "repetitive"],
+};
+
+function literalSignalWrapper(label: string, personaSignals: SemanticPersonaSignal[]): boolean {
+  const normalized = normalizedPersonaLabel(label);
+  const genericSuffix = /^(?:型)?(?:助手|小能手|选手|达人|专家|实习生|agent|typeassistant|assistant|helper|expert|intern)?$/u;
+  return personaSignals.some((signal) => {
+    const candidates = [signal.label, ...(ENGLISH_SIGNAL_LABELS[signal.key] ?? [])]
+      .map(normalizedPersonaLabel)
+      .filter(Boolean);
+    return candidates.some((candidate) => normalized.startsWith(candidate) && genericSuffix.test(normalized.slice(candidate.length)));
+  });
+}
+
 export function parseNarrationOutput(
   raw: string,
   stories: VerifiedStoryArc[],
@@ -87,7 +120,11 @@ export function parseNarrationOutput(
     if (!entry) throw new Error("Semantic narrator returned invalid persona.");
     let label = boundedText(entry.label, "persona.label", 100);
     const tagline = boundedText(entry.tagline, "persona.tagline", 180);
-    if (hiddenStateClaim(`${label}\n${tagline}`)) return { storyCards };
+    if (
+      hiddenStateClaim(`${label}\n${tagline}`) ||
+      unsupportedUserCausality(`${label}\n${tagline}`) ||
+      literalSignalWrapper(label, personaSignals)
+    ) return { storyCards };
     if (locale === "zh-CN" && !/^本场/u.test(label)) label = `本场表现像${label}`;
     if (locale === "en" && !/\bsession\b/iu.test(label)) label = `This session played like ${label}`;
     persona = { label, tagline };
