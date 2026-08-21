@@ -171,6 +171,49 @@ test("P5 tolerates a real-shaped image-only user message without inventing text"
   assert.ok(session.diagnostics.some((entry) => entry.code === "no-visible-assistant-messages"));
 });
 
+test("P5 keeps DSH host injections local without treating them as human speech", () => {
+  const jsonl = [
+    JSON.stringify({ type: "session", version: 0, id: "source-kind-session", createdAt: 1784973850091 }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 1,
+      data: {
+        id: "instructions-1",
+        content: [{ type: "text", text: "HOST_INSTRUCTION_SENTINEL" }],
+        source: { kind: "agent-instructions" },
+      },
+    }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 2,
+      data: {
+        id: "human-1",
+        content: [{ type: "text", text: "你第一轮竟然没看图" }],
+        source: { kind: "user" },
+      },
+    }),
+    JSON.stringify({
+      type: "user/message",
+      seq: 3,
+      data: {
+        id: "plugin-1",
+        content: [{ type: "text", text: "PLUGIN_RUNTIME_SENTINEL" }],
+        source: { kind: "plugin" },
+      },
+    }),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(jsonl);
+
+  assert.deepEqual(session.messages.map((message) => message.role), ["system", "user", "system"]);
+  assert.deepEqual(session.events?.map((event) => event.actor), ["system", "user", "system"]);
+  assert.deepEqual(session.events?.map((event) => event.kind), ["unknown", "user_message", "unknown"]);
+  assert.equal(session.messages[0].text, "HOST_INSTRUCTION_SENTINEL");
+  assert.equal(session.messages[2].text, "PLUGIN_RUNTIME_SENTINEL");
+  assert.equal(session.messages[0].metadata?.sourceKind, "agent-instructions");
+  assert.equal(session.events?.[2].metadata?.sourceKind, "plugin");
+});
+
 test("P5 resolves the DSH sessions root from DSH_HOME", () => {
   const root = resolveDshSessionsRoot(undefined, { DSH_HOME: "/tmp/custom-dsh" });
   assert.equal(root, join("/tmp/custom-dsh", "sessions"));

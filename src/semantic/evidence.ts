@@ -42,6 +42,7 @@ interface WindowCandidate {
 
 function isNarrativeTurnCandidate(candidate: WindowCandidate): boolean {
   return candidate.reasons.some((reason) =>
+    reason === "human-turn-episode" ||
     reason === "user-pushback" ||
     reason === "assistant-correction" ||
     reason === "assistant-certainty"
@@ -107,7 +108,12 @@ function failureCue(text: string | undefined): boolean {
 
 function correctionCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:等等|不对|我错了|判断错|收回|看错|虚惊|重新来|wait|hold on|i was wrong|scratch that|retract)/iu.test(text);
+  return /(?:等等|不对|我错了|判断错|收回|看错|虚惊|重新来|你说得对|我的失误|没有任何借口|坏习惯|抱歉|对不起|wait|hold on|i was wrong|you(?:'re| are) right|my mistake|bad habit|sorry|scratch that|retract)/iu.test(text);
+}
+
+function pushbackCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text);
 }
 
 function certaintyCue(text: string | undefined): boolean {
@@ -138,7 +144,7 @@ function eventSignal(
     score += 7;
     reasons.push("turn-failure");
   }
-  if (event.actor === "user" && failureCue(event.text)) {
+  if (event.actor === "user" && (failureCue(event.text) || pushbackCue(event.text))) {
     score += 6;
     reasons.push("user-pushback");
   }
@@ -151,6 +157,82 @@ function eventSignal(
     reasons.push("assistant-certainty");
   }
   return { score, reasons };
+}
+
+function narrativeMessage(event: SessionEvent): boolean {
+  return (event.actor === "assistant" && event.kind === "assistant_text") ||
+    (event.actor === "user" && event.kind === "user_message");
+}
+
+function withinNarrativeEpisode(
+  anchor: SessionEvent,
+  anchorIndex: number,
+  candidate: SessionEvent,
+  candidateIndex: number,
+): boolean {
+  if (anchor.messageIndex !== undefined && candidate.messageIndex !== undefined) {
+    return Math.abs(anchor.messageIndex - candidate.messageIndex) <= 6;
+  }
+  return Math.abs(anchorIndex - candidateIndex) <= 24;
+}
+
+/**
+ * Project a bounded human-visible exchange across intervening tool/system noise.
+ * This follows message adjacency, not a wider generic event radius, so one real
+ * correction episode stays intact without stitching distant work together.
+ */
+function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
+  const narrativeIndexes = events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => narrativeMessage(event))
+    .map(({ index }) => index);
+  const candidates: WindowCandidate[] = [];
+
+  for (const anchorIndex of narrativeIndexes) {
+    const anchor = events[anchorIndex];
+    if (!anchor) continue;
+    const assistantCorrection = anchor.actor === "assistant" && correctionCue(anchor.text);
+    const userPushback = anchor.actor === "user" && pushbackCue(anchor.text);
+    if (!assistantCorrection && !userPushback) continue;
+
+    const nearby = narrativeIndexes.filter((index) => {
+      const event = events[index];
+      return !!event && withinNarrativeEpisode(anchor, anchorIndex, event, index);
+    });
+    const indexes = [anchorIndex];
+
+    if (userPushback) {
+      const previousAssistant = [...nearby].reverse().find((index) => index < anchorIndex && events[index]?.actor === "assistant");
+      const nextAssistant = nearby.find((index) => index > anchorIndex && events[index]?.actor === "assistant");
+      if (previousAssistant !== undefined) indexes.push(previousAssistant);
+      if (nextAssistant !== undefined) indexes.push(nextAssistant);
+    } else {
+      const previousUser = [...nearby].reverse().find((index) => index < anchorIndex && events[index]?.actor === "user");
+      const nextUser = nearby.find((index) => index > anchorIndex && events[index]?.actor === "user");
+      if (nextUser !== undefined) {
+        indexes.push(nextUser);
+        const nextAssistant = nearby.find((index) => index > nextUser && events[index]?.actor === "assistant");
+        if (nextAssistant !== undefined) indexes.push(nextAssistant);
+      } else {
+        if (previousUser !== undefined) indexes.push(previousUser);
+        const nextAssistant = nearby.find((index) => index > anchorIndex && events[index]?.actor === "assistant");
+        if (nextAssistant !== undefined) indexes.push(nextAssistant);
+      }
+    }
+
+    const eventIndexes = orderedUniqueIndexes(indexes);
+    if (eventIndexes.length < 2) continue;
+    candidates.push({
+      eventIndexes,
+      score: 16,
+      reasons: [
+        "human-turn-episode",
+        assistantCorrection ? "assistant-correction" : "user-pushback",
+      ],
+      coverage: false,
+    });
+  }
+  return candidates;
 }
 
 function overlapRatio(left: WindowCandidate, right: WindowCandidate): number {
@@ -246,7 +328,8 @@ function selectWindows(
   }
 
   const selected: WindowCandidate[] = [];
-  const episodeWindows = episodeCandidates(events, toolFacts);
+  const narrativeWindows = narrativeEpisodeCandidates(events);
+  const episodeWindows = [...narrativeWindows, ...episodeCandidates(events, toolFacts)];
   const signalBudget = Math.max(0, maxWindows - coverage.length);
 
   // Failure→follow-up episodes are strong factual anchors, but they are not
@@ -256,7 +339,7 @@ function selectWindows(
   // This is a selection/diversity rule, not a wider window or another keyword
   // detector, and it leaves ordinary failure coverage intact.
   if (signalBudget > 0) {
-    for (const candidate of candidates
+    for (const candidate of [...narrativeWindows, ...candidates]
       .filter(isNarrativeTurnCandidate)
       .sort((a, b) => b.score - a.score || firstEventIndex(a) - firstEventIndex(b))) {
       if (selected.length >= 1) break;
@@ -324,6 +407,7 @@ function eventText(event: SessionEvent): string | undefined {
   // The remote semantic boundary never receives raw tool arguments/results or
   // unstructured turn-end error messages. Tool facts are added separately as
   // classified, allowlisted fields below.
+  if (event.actor === "system") return undefined;
   if (event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error") return undefined;
   if (event.kind === "turn_end") return `turn ended: ${event.outcome ?? "unknown"}`;
   return event.text;

@@ -192,6 +192,40 @@ test("window recall reserves a narrative turn beside repeated tool failure episo
   );
 });
 
+test("window recall keeps one human correction episode across tool and system noise", () => {
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "human-correction-episode",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "admission", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "上一轮我没有先看图就开始改，抱歉。" },
+      { id: "tool-call", host: "dsh", actor: "tool", kind: "tool_call", order: 1, callId: "vision-1", toolName: "vision", toolArguments: "PRIVATE_IMAGE_PAYLOAD" },
+      { id: "tool-result", host: "dsh", actor: "tool", kind: "tool_result", order: 2, callId: "vision-1", isError: false, text: "RESULT_SENTINEL" },
+      { id: "runtime", host: "dsh", actor: "system", kind: "unknown", order: 3, messageIndex: 1, text: "PLUGIN_RUNTIME_SENTINEL" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 4, messageIndex: 2, text: "你第一轮竟然没看图" },
+      { id: "search", host: "dsh", actor: "tool", kind: "tool_call", order: 5, callId: "search-1", toolName: "grep", toolArguments: "SOURCE_SENTINEL" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 6, messageIndex: 3, text: "你说得对，第一轮没看是我的失误，没有任何借口。" },
+    ],
+  }, [], { coverageWindows: 0, maxWindows: 1, eventRadius: 1, maxEvents: 10 });
+
+  const window = evidence.windows.find((candidate) => candidate.reasons.includes("human-turn-episode"));
+  assert.ok(window);
+  assert.ok(["event:admission", "event:human", "event:reply"].every((id) => window.eventIds.includes(id)));
+  assert.equal(window.eventIds.includes("event:runtime"), false);
+  assert.doesNotMatch(JSON.stringify(evidence), /PLUGIN_RUNTIME_SENTINEL|PRIVATE_IMAGE_PAYLOAD|RESULT_SENTINEL|SOURCE_SENTINEL/u);
+  assert.equal(validateStoryCandidates([{
+    windowId: window.id,
+    arcKind: "user_pushback_then_recovery",
+    confidence: "high",
+    beats: [
+      { kind: "user_pushback", evidenceIds: ["event:human"] },
+      { kind: "correction", evidenceIds: ["event:reply"] },
+    ],
+  }], evidence).stories.length, 1);
+});
+
 test("P8 v2 keeps raw tool payloads local and sends only structural tool evidence", () => {
   const evidence = buildSemanticEvidenceFromMoments(session(), []);
   const remote = JSON.stringify(evidence);
@@ -225,6 +259,10 @@ test("Story Miner prompt requires one local window and structure only", () => {
   const narration = buildNarrationPrompt(evidence, validation.stories, signals);
   assert.match(narration.system, /只负责/u);
   assert.match(narration.system, /禁止输出 0-100/u);
+  assert.match(narration.system, /赛后大赏，不是审核报告/u);
+  assert.doesNotMatch(narration.user, /一个 Bug，三次大结局|收工很积极的侦探/u);
+  assert.match(narration.user, /"storyId": "story:0"/u);
+  assert.doesNotMatch(narration.user, /"id": "event:e0"|"id": "event:e1"/u);
 });
 
 test("local grounding refuses to stitch beats across separate story windows", () => {
@@ -371,6 +409,7 @@ test("remote semantic evidence excludes raw tool payload sentinels", () => {
   const localEvents = [
     { id: "call", host: "dsh", actor: "tool", kind: "tool_call", order: 0, callId: "CALL_ID_SENTINEL", toolName: "write", toolArguments: privatePayload },
     { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 1, callId: "CALL_ID_SENTINEL", isError: false, text: privatePayload },
+    { id: "host", host: "dsh", actor: "system", kind: "unknown", order: 2, text: "HOST_INSTRUCTION_SENTINEL" },
   ];
   const evidence = buildSemanticEvidenceFromMoments({
     id: "egress-boundary",
@@ -381,7 +420,7 @@ test("remote semantic evidence excludes raw tool payload sentinels", () => {
     events: localEvents,
   }, [], { coverageWindows: 1, maxEvents: 10 });
   const remote = JSON.stringify(evidence);
-  for (const sentinel of [...sentinels, "CALL_ID_SENTINEL"]) assert.ok(!remote.includes(sentinel), `${sentinel} leaked into remote evidence`);
+  for (const sentinel of [...sentinels, "CALL_ID_SENTINEL", "HOST_INSTRUCTION_SENTINEL"]) assert.ok(!remote.includes(sentinel), `${sentinel} leaked into remote evidence`);
   assert.equal(evidence.events.find((event) => event.id === "event:call")?.text, undefined);
   assert.equal(evidence.events.find((event) => event.id === "event:result")?.text, undefined);
   assert.equal(evidence.events.find((event) => event.id === "event:result")?.callId, "call:0");
@@ -615,6 +654,13 @@ test("narrator cannot invent story ids and persona labels are forced to be sessi
     persona: { label: "执着型实习生", tagline: "工具失败以后会继续换路。" },
   }), stories, signals, "zh-CN");
   assert.match(narration.persona.label, /^本场表现像/u);
+
+  const hiddenState = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "权限拦住以后换了条路" }],
+    persona: { label: "内心戏很足的纠错选手", tagline: "心里一直在写剧本。" },
+  }), stories, signals, "zh-CN");
+  assert.equal(hiddenState.storyCards.length, 1);
+  assert.equal(hiddenState.persona, undefined);
 });
 
 test("routine tool trajectories stay verified locally but do not become Wrapped story/persona cards", async () => {
@@ -673,6 +719,39 @@ test("generateSemanticStoryPersona performs miner then narrator only for a showa
   assert.equal(report.stories[0].windowId, expectedWindowId);
   assert.equal(report.narration.storyCards[0].storyId, "story:0");
   assert.ok(report.personaSignals.some((signal) => signal.key === "improvisation"));
+});
+
+test("explicit human behavior callout has a grounded local fallback when Miner mislabels context", async () => {
+  const targetSession = {
+    id: "human-turn-recall",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "context", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "我每轮都会复述一次限制。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 8, messageIndex: 1, text: "为什么你每次都会说这个？" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 16, messageIndex: 2, text: "好问题，我承认这属于我的坏习惯。" },
+    ],
+  };
+  const evidence = buildSemanticEvidenceFromMoments(targetSession, [], { coverageWindows: 0 });
+  const window = evidence.windows.find((candidate) => candidate.reasons.includes("human-turn-episode"));
+  assert.ok(window);
+  const outputs = [
+    "{}",
+    JSON.stringify({
+      storyCards: [{ storyId: "story:0", title: "系统提醒没烦它，先把用户烦到了", commentary: "用户点名后，它终于戒掉复读。" }],
+      persona: { label: "本场表现像被当场抓包的复读机", tagline: "提醒记得很牢，用户意见第二遍才记住。" },
+    }),
+  ];
+  const requests = [];
+  const narrator = { async generate(request) { requests.push(request); return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(requests.length, 2);
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.stories[0].beats[0].kind, "user_pushback");
+  assert.equal(report.narration.storyCards[0].storyId, "story:0");
 });
 
 test("verified structure survives an unavailable editorial narration call", async () => {

@@ -166,10 +166,16 @@ function appendUserMessage(
   if (blocks.length === 0) return;
   const text = blocks.map((block) => block.text).join("\n\n").trim();
   if (!text) return;
+  const sourceKind = string(object(data.source)?.kind);
+  // DSH persists host/plugin injections through the same `user/message`
+  // envelope as human input. Keep their original text locally, but do not
+  // misrepresent them as something the human said. Missing sourceKind remains
+  // user for compatibility with older exports.
+  const isHumanUser = sourceKind === undefined || sourceKind === "user";
   const messageIndex = messages.length;
   messages.push({
     id: `dsh:${eventSeq(record, lineIndex)}:user`,
-    role: "user",
+    role: isHumanUser ? "user" : "system",
     text,
     host: "dsh",
     timestamp: eventTimestamp(record.time),
@@ -178,16 +184,17 @@ function appendUserMessage(
       dshSeq: record.seq,
       dshMessageId: string(data.id),
       surfaceOp: record.surfaceOp ?? data.surfaceOp,
-      sourceKind: string(object(data.source)?.kind),
+      sourceKind,
     },
   });
   events.push({
     id: `dsh:${eventSeq(record, lineIndex)}:user-event`,
     ...eventBase(record, lineIndex),
-    actor: "user",
-    kind: "user_message",
+    actor: isHumanUser ? "user" : "system",
+    kind: isHumanUser ? "user_message" : "unknown",
     messageIndex,
     text,
+    metadata: { sourceKind },
   });
 }
 

@@ -139,11 +139,21 @@ function blockCue(text: string | undefined): boolean {
 }
 
 function pushbackCue(text: string | undefined): boolean {
-  return !!text && /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text);
+  return !!text && /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text);
+}
+
+function behaviorCalloutCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:(?:为什么|怎么).{0,10}你.{0,24}(?:每次|总是|一直|又)|你.{0,24}(?:竟然|居然|每次|总是|一直|第一轮|刚才).{0,24}(?:没|没有|又|都)|why\s+(?:do|did)\s+you.{0,32}(?:always|keep)|you.{0,24}(?:always|kept|just|never|didn't|did not))/iu.test(text);
 }
 
 function correctionCue(text: string | undefined): boolean {
-  return !!text && /(?:等等|不对|我错了|判断错|看错|收回|改口|重新检查|真正(?:的)?(?:问题|根因)|其实|wait|hold on|i was wrong|scratch that|retract|actually)/iu.test(text);
+  return !!text && /(?:等等|不对|我错了|判断错|看错|收回|改口|重新检查|真正(?:的)?(?:问题|根因)|其实|你说得对|我的失误|没有任何借口|坏习惯|抱歉|对不起|wait|hold on|i was wrong|you(?:'re| are) right|my mistake|bad habit|sorry|scratch that|retract|actually)/iu.test(text);
+}
+
+function explicitAdmissionCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:你说得对|我的失误|没有任何借口|坏习惯|我错了|判断错|看错|做错|不该|you(?:'re| are) right|my mistake|bad habit|i was wrong|shouldn'?t have)/iu.test(text);
 }
 
 function reversalCue(text: string | undefined): boolean {
@@ -287,7 +297,10 @@ function relationalBeatProblem(beats: ResolvedBeat[]): string | undefined {
       }
     }
     if (beat.kind === "correction" || beat.kind === "reversal") {
-      if (!prior.some((entry) => ["setup", "claim", "attempt"].includes(entry.kind))) {
+      const validPrior = beat.kind === "correction"
+        ? ["setup", "claim", "attempt", "user_pushback"]
+        : ["setup", "claim", "attempt"];
+      if (!prior.some((entry) => validPrior.includes(entry.kind))) {
         return `${beat.kind}-without-prior-position`;
       }
     }
@@ -398,6 +411,48 @@ function deduplicateStories(
 export interface StoryValidationResult {
   stories: VerifiedStoryArc[];
   rejected: Array<{ candidateIndex: number; reason: string }>;
+}
+
+/**
+ * Deterministic high-precision fallback for a narrow, human-visible structure:
+ * the human calls out the Agent's repeated/mistaken behavior and the Agent then
+ * explicitly admits it. The candidate still passes the ordinary local window,
+ * chronology, beat, and episode validation below.
+ */
+export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle): SemanticStoryCandidate[] {
+  const eventById = new Map(evidence.events.map((event) => [event.id, event]));
+  const candidates: SemanticStoryCandidate[] = [];
+  for (const window of evidence.windows) {
+    if (!window.reasons.includes("human-turn-episode")) continue;
+    const events = window.eventIds.map((id) => eventById.get(id)).filter((event): event is EvidenceEvent => !!event)
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+    for (const userEvent of events) {
+      if (
+        userEvent.actor !== "user" ||
+        userEvent.kind !== "user_message" ||
+        !pushbackCue(eventText(userEvent)) ||
+        !behaviorCalloutCue(eventText(userEvent))
+      ) continue;
+      const correction = events.find((event) =>
+        event.order > userEvent.order &&
+        event.actor === "assistant" &&
+        event.kind === "assistant_text" &&
+        correctionCue(eventText(event)) &&
+        explicitAdmissionCue(eventText(event))
+      );
+      if (!correction) continue;
+      candidates.push({
+        windowId: window.id,
+        arcKind: "user_pushback_then_recovery",
+        beats: [
+          { kind: "user_pushback", evidenceIds: [userEvent.id] },
+          { kind: "correction", evidenceIds: [correction.id] },
+        ],
+        confidence: "high",
+      });
+    }
+  }
+  return candidates;
 }
 
 /**

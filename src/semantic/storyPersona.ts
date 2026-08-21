@@ -3,7 +3,7 @@ import { buildSemanticEvidence, type SemanticEvidenceOptions } from "./evidence.
 import { aggregatePersonaSignals } from "./persona.js";
 import { buildNarrationPrompt, buildStoryMinerPrompt } from "./prompt.js";
 import { admitStoriesForWrapped } from "./storyAdmission.js";
-import { parseStoryMinerOutput, validateStoryCandidates } from "./storyMiner.js";
+import { inferHumanTurnStoryCandidates, parseStoryMinerOutput, validateStoryCandidates } from "./storyMiner.js";
 import type {
   SemanticEvidenceBundle,
   SemanticNarration,
@@ -35,6 +35,10 @@ function boundedText(value: unknown, path: string, maxChars: number): string {
 function optionalBoundedText(value: unknown, path: string, maxChars: number): string | undefined {
   if (value === null || value === undefined) return undefined;
   return boundedText(value, path, maxChars);
+}
+
+function hiddenStateClaim(text: string): boolean {
+  return /(?:心里|内心|暗自|故意|偷偷|动机|甩锅|假装|明知|in (?:its|his|her) (?:head|mind)|inner thought|secretly|intentionally|wanted to|pretend|blame)/iu.test(text);
 }
 
 export function parseNarrationOutput(
@@ -78,6 +82,7 @@ export function parseNarrationOutput(
     if (!entry) throw new Error("Semantic narrator returned invalid persona.");
     let label = boundedText(entry.label, "persona.label", 100);
     const tagline = boundedText(entry.tagline, "persona.tagline", 180);
+    if (hiddenStateClaim(`${label}\n${tagline}`)) return { storyCards };
     if (locale === "zh-CN" && !/^本场/u.test(label)) label = `本场表现像${label}`;
     if (locale === "en" && !/\bsession\b/iu.test(label)) label = `This session played like ${label}`;
     persona = { label, tagline };
@@ -132,8 +137,22 @@ export async function generateSemanticStoryPersona(
   }
 
   const miningRaw = await narrator.generate(buildStoryMinerPrompt(evidence));
-  const mining = parseStoryMinerOutput(miningRaw);
-  const validation = validateStoryCandidates(mining.candidates, evidence);
+  let mining: ReturnType<typeof parseStoryMinerOutput>;
+  try {
+    mining = parseStoryMinerOutput(miningRaw);
+  } catch {
+    mining = {
+      candidates: [],
+      insufficientEvidence: evidence.locale === "zh-CN"
+        ? "Story Miner 没有返回可用的结构化结果。"
+        : "Story Miner returned no usable structured result.",
+    };
+  }
+  let validation = validateStoryCandidates(mining.candidates, evidence);
+  if (validation.stories.length === 0) {
+    const localHumanTurn = validateStoryCandidates(inferHumanTurnStoryCandidates(evidence), evidence);
+    if (localHumanTurn.stories.length > 0) validation = localHumanTurn;
+  }
   const admission = admitStoriesForWrapped(validation.stories, evidence);
   const stories = admission.stories;
   // A generic worklog trajectory must not create a personality card by itself.
