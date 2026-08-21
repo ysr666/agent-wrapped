@@ -143,8 +143,13 @@ function blockCue(text: string | undefined): boolean {
 function pushbackCue(text: string | undefined): boolean {
   return !!text && (
     /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text) ||
-    terseNegativeReplyCue(text) || behaviorCalloutCue(text) || authorityBoundaryCue(text)
+    terseNegativeReplyCue(text) || directContradictionCue(text) || behaviorCalloutCue(text) || authorityBoundaryCue(text)
   );
+}
+
+function directContradictionCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:^|[，。！？!?;；]\s*)(?:怎么可能|不可能)|\b(?:how (?:is|was) that possible|that can'?t be right)\b/iu.test(text);
 }
 
 function authorityBoundaryCue(text: string | undefined): boolean {
@@ -168,7 +173,7 @@ function clarificationCue(text: string | undefined): boolean {
 
 function claimCounterevidenceCue(text: string | undefined): boolean {
   if (!text) return false;
-  const concreteCounterevidence = directFailureReportCue(text) || failureCue(text) || terseNegativeReplyCue(text) ||
+  const concreteCounterevidence = directFailureReportCue(text) || failureCue(text) || terseNegativeReplyCue(text) || directContradictionCue(text) ||
     /(?:^|[，。！？!?;；]\s*)(?:不对|错了|不是(?:这样|这个|的)?|你(?:搞|弄|说)错了|我说的是)|\b(?:wrong|that'?s wrong|not what i (?:asked|said|meant))\b/iu.test(text);
   if (clarificationCue(text) && !concreteCounterevidence) return false;
   return concreteCounterevidence;
@@ -218,12 +223,12 @@ function recoveryCue(text: string | undefined): boolean {
 }
 
 function certaintyCue(text: string | undefined): boolean {
-  return !!text && /(?:修好了|解决了|找到(?:了)?根因|问题.*(?:明确|清楚)|可以结束|没问题了|搞定|完成了|fixed|solved|root cause|done|all good|resolved)/iu.test(text);
+  return !!text && /(?:修好了|解决了|找到(?:了)?根因|(?:问题|根因).{0,12}(?:明确|清楚)|可以结束|没问题了|搞定|完成了|fixed|solved|root cause|done|all good|resolved)/iu.test(text);
 }
 
 function strongCompletionClaimCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:修好(?:了)?|修复(?:完成|好了)|解决(?:了|完成)|搞定(?:了)?|全部完成|没问题(?:了)?|全绿|找到(?:真正的)?根因|根因.{0,8}(?:找到|确认|锁定)|\b(?:fixed|solved|resolved|done|all green|all good|root cause found)\b)/iu.test(text);
+  return /(?:修好(?:了)?|修复(?:完成|好了)|解决(?:了|完成)|搞定(?:了)?|全部完成|没问题(?:了)?|全绿|找到(?:真正的)?根因|根因.{0,12}(?:找到|确认|锁定|明确|清楚)|\b(?:fixed|solved|resolved|done|all green|all good|root cause (?:found|confirmed|clear))\b)/iu.test(text);
 }
 
 function claimCue(text: string | undefined): boolean {
@@ -561,6 +566,7 @@ export function inferHumanTurnStoryCandidates(evidence: SemanticEvidenceBundle):
       if (
         (
           terseNegativeReplyCue(eventText(userEvent)) ||
+          directContradictionCue(eventText(userEvent)) ||
           directFailureReportCue(eventText(userEvent)) ||
           (
             window.reasons.includes("closure-interruption-episode") &&

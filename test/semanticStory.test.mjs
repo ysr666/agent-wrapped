@@ -817,6 +817,145 @@ test("admission keeps a grounded story with a human-visible capability turn", ()
   assert.equal(admission.suppressed.length, 0);
 });
 
+test("admission rejects bare corrections but keeps pushback with a dramatic anchor", () => {
+  const story = {
+    id: "story:correction",
+    windowId: "window:correction",
+    arcKind: "user_pushback_then_recovery",
+    beats: [
+      { kind: "user_pushback", evidenceIds: ["event:user"] },
+      { kind: "correction", evidenceIds: ["event:assistant"] },
+    ],
+    evidenceIds: ["event:user", "event:assistant"],
+    confidence: "high",
+  };
+  const evidence = {
+    version: 2,
+    sessionId: "admission-threshold",
+    host: "dsh",
+    locale: "zh-CN",
+    redactionCount: 0,
+    truncated: false,
+    events: [
+      { id: "event:user", order: 0, actor: "user", kind: "user_message", text: "不对，日志漏了一项。" },
+      { id: "event:assistant", order: 1, actor: "assistant", kind: "assistant_text", text: "你说得对，我漏了。" },
+    ],
+    windows: [{ id: "window:correction", eventIds: ["event:user", "event:assistant"], reasons: ["human-turn-episode", "user-pushback"] }],
+    momentHints: [],
+  };
+
+  const weak = admitStoriesForWrapped([story], evidence);
+  assert.equal(weak.stories.length, 0);
+  assert.equal(weak.suppressed[0].reason, "weak-human-correction");
+
+  for (const reason of ["behavior-callout-episode", "authority-boundary-episode", "claim-pushback-episode", "direct-failure-episode"]) {
+    const anchored = admitStoriesForWrapped([story], {
+      ...evidence,
+      windows: [{ ...evidence.windows[0], reasons: [...evidence.windows[0].reasons, reason] }],
+    });
+    assert.equal(anchored.stories.length, 1, `expected ${reason} to keep the Story`);
+  }
+
+  const p4Backed = admitStoriesForWrapped([story], {
+    ...evidence,
+    momentHints: [{ id: "moment:1", type: "plot_twist", primaryText: "我漏了", relatedTexts: [], eventIds: ["event:assistant"] }],
+  });
+  assert.equal(p4Backed.stories.length, 1);
+});
+
+test("a verified bare correction stops before narration and persona", async () => {
+  const targetSession = {
+    id: "weak-correction-admission",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "setup", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "发布记录写完了。" },
+      { id: "user", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "不对，日志漏了一项。" },
+      { id: "assistant", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "你说得对，我漏了。" },
+    ],
+  };
+  const evidence = buildSemanticEvidenceFromMoments(targetSession, [], { coverageWindows: 0 });
+  const window = evidence.windows.find((candidate) => candidate.reasons.includes("user-pushback"));
+  assert.ok(window);
+  const outputs = [JSON.stringify({ stories: [{
+    windowId: window.id,
+    arcKind: "user_pushback_then_recovery",
+    beats: [
+      { kind: "user_pushback", evidenceIds: ["event:user"] },
+      { kind: "correction", evidenceIds: ["event:assistant"] },
+    ],
+    confidence: "high",
+  }] })];
+  const requests = [];
+  const narrator = { async generate(request) { requests.push(request); return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(requests.length, 1);
+  assert.equal(report.stories.length, 0);
+  assert.equal(report.personaSignals.length, 0);
+  assert.equal(report.diagnostics?.verifiedStoryCount, 1);
+  assert.equal(report.diagnostics?.suppressionReasons["weak-human-correction"], 1);
+});
+
+test("an incredulous correction punctures a confident root-cause claim", () => {
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "incredulous-root-cause",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "两个 session 是同一个 bug，根因非常明确。" },
+      { id: "pushback", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "怎么可能，我本地不就是 1.2.0 吗？" },
+      { id: "correction", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "你说得对，我上一条说得含糊了。" },
+    ],
+  }, [], { coverageWindows: 0 });
+
+  const window = evidence.windows.find((candidate) => candidate.reasons.includes("claim-pushback-episode"));
+  assert.ok(window);
+  assert.ok(["event:claim", "event:pushback", "event:correction"].every((id) => window.eventIds.includes(id)));
+
+  const questionOnly = buildSemanticEvidenceFromMoments({
+    id: "root-cause-question",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "根因非常明确。" },
+      { id: "question", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "你确定吗？" },
+    ],
+  }, [], { coverageWindows: 0 });
+  assert.ok(!questionOnly.windows.some((candidate) => candidate.reasons.includes("claim-pushback-episode")));
+});
+
+test("a confident root-cause claim punctured by disbelief has deterministic local recall", async () => {
+  const targetSession = {
+    id: "root-cause-disbelief",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "两个 session 是同一个 bug，根因非常明确。" },
+      { id: "pushback", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "怎么可能，我本地不就是 1.2.0 吗？" },
+      { id: "correction", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "你说得对，我上一条说得含糊了。" },
+    ],
+  };
+  const outputs = [
+    "{}",
+    JSON.stringify({ storyCards: [{ storyId: "story:0", title: "根因非常明确，直到用户报出版本号" }] }),
+  ];
+  const narrator = { async generate() { return outputs.shift(); } };
+  const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
+
+  assert.equal(report.stories.length, 1);
+  assert.equal(report.stories[0].arcKind, "false_dawn");
+  assert.deepEqual(report.stories[0].beats.map((beat) => beat.kind), ["claim", "user_pushback"]);
+});
+
 test("generateSemanticStoryPersona performs miner then narrator only for a showable story", async () => {
   const expectedWindowId = capabilityWindowId(buildSemanticEvidenceFromMoments(capabilityGapSession(), []));
   const outputs = [

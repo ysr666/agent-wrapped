@@ -8,6 +8,7 @@ import type { SemanticEvidenceBundle, VerifiedStoryArc } from "./types.js";
  */
 export type SemanticStorySuppressionReason =
   | "low-confidence"
+  | "weak-human-correction"
   | "routine-tool-trajectory";
 
 export interface SemanticStoryAdmission {
@@ -45,6 +46,13 @@ const DRAMATIC_MOMENT_HINTS = new Set<SemanticEvidenceBundle["momentHints"][numb
   "correction_arc",
 ]);
 
+const DISTINCTIVE_PUSHBACK_WINDOW_REASONS = new Set([
+  "authority-boundary-episode",
+  "behavior-callout-episode",
+  "claim-pushback-episode",
+  "direct-failure-episode",
+]);
+
 function hasHumanVisibleTurn(story: VerifiedStoryArc): boolean {
   return story.beats.some((beat) => HUMAN_VISIBLE_TURN_BEATS.has(beat.kind));
 }
@@ -57,6 +65,15 @@ function overlapsDramaticMomentHint(
   return evidence.momentHints.some((hint) =>
     DRAMATIC_MOMENT_HINTS.has(hint.type) && hint.eventIds.some((id) => storyEvidence.has(id))
   );
+}
+
+function hasDistinctivePushbackAnchor(
+  story: VerifiedStoryArc,
+  evidence: SemanticEvidenceBundle,
+): boolean {
+  const window = evidence.windows.find((candidate) => candidate.id === story.windowId);
+  return !!window?.reasons.some((reason) => DISTINCTIVE_PUSHBACK_WINDOW_REASONS.has(reason)) ||
+    overlapsDramaticMomentHint(story, evidence);
 }
 
 /**
@@ -75,6 +92,14 @@ export function admitStoriesForWrapped(
   for (const story of stories) {
     if (story.confidence === "low") {
       suppressed.push({ storyId: story.id, reason: "low-confidence" });
+      continue;
+    }
+
+    if (
+      story.arcKind === "user_pushback_then_recovery" &&
+      !hasDistinctivePushbackAnchor(story, evidence)
+    ) {
+      suppressed.push({ storyId: story.id, reason: "weak-human-correction" });
       continue;
     }
 

@@ -116,7 +116,12 @@ function correctionCue(text: string | undefined): boolean {
 function pushbackCue(text: string | undefined): boolean {
   if (!text) return false;
   return /(?:还是(?:不行|失败|报错|挂|错)|不对|错了|不是|没(?:修好|成功|对)|又(?:错|挂|失败)|怎么又|我说的是|别这样|为什么你|竟然(?:没|没有)|wrong|still\s+(?:fails?|broken|wrong)|that's\s+wrong|not\s+what|didn't|doesn't)/iu.test(text) ||
-    terseNegativeReplyCue(text) || behaviorCalloutCue(text) || authorityBoundaryCue(text);
+    terseNegativeReplyCue(text) || directContradictionCue(text) || behaviorCalloutCue(text) || authorityBoundaryCue(text);
+}
+
+function directContradictionCue(text: string | undefined): boolean {
+  if (!text) return false;
+  return /(?:^|[，。！？!?;；]\s*)(?:怎么可能|不可能)|\b(?:how (?:is|was) that possible|that can'?t be right)\b/iu.test(text);
 }
 
 function authorityBoundaryCue(text: string | undefined): boolean {
@@ -196,12 +201,12 @@ function behaviorCalloutCue(text: string | undefined): boolean {
 
 function certaintyCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:修好了|解决了|找到根因|问题.*明确|可以结束|没问题了|fixed|solved|root cause|done|all good)/iu.test(text);
+  return /(?:修好了|解决了|找到根因|(?:问题|根因).{0,12}(?:明确|清楚)|可以结束|没问题了|fixed|solved|root cause|done|all good)/iu.test(text);
 }
 
 function strongCompletionClaimCue(text: string | undefined): boolean {
   if (!text) return false;
-  return /(?:修好(?:了)?|修复(?:完成|好了)|解决(?:了|完成)|搞定(?:了)?|全部完成|没问题(?:了)?|全绿|找到(?:真正的)?根因|根因.{0,8}(?:找到|确认|锁定)|\b(?:fixed|solved|resolved|done|all green|all good|root cause found)\b)/iu.test(text);
+  return /(?:修好(?:了)?|修复(?:完成|好了)|解决(?:了|完成)|搞定(?:了)?|全部完成|没问题(?:了)?|全绿|找到(?:真正的)?根因|根因.{0,12}(?:找到|确认|锁定|明确|清楚)|\b(?:fixed|solved|resolved|done|all green|all good|root cause (?:found|confirmed|clear))\b)/iu.test(text);
 }
 
 function explicitAdmissionCue(text: string | undefined): boolean {
@@ -370,7 +375,7 @@ function narrativeEpisodeCandidates(events: SessionEvent[]): WindowCandidate[] {
         );
         closureInterruption = puncturedClaimIndex !== undefined;
       } else if (
-        terseNegativeReplyCue(anchor.text) &&
+        (terseNegativeReplyCue(anchor.text) || directContradictionCue(anchor.text)) &&
         strongCompletionClaimCue(events[previousAssistant]?.text)
       ) {
         puncturedClaimIndex = previousAssistant;
