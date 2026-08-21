@@ -23,7 +23,8 @@ export function createWrappedReport(
   options: CreateWrappedReportOptions = {},
 ): WrappedReport {
   const locale = options.locale ?? options.awards?.locale ?? "zh-CN";
-  const graph = buildMomentGraph(messages, options.graph);
+  const currentMessages = messages.filter((message) => message.metadata?.inheritedContext !== true);
+  const graph = buildMomentGraph(currentMessages, options.graph);
   const moments = buildMoments(graph, options.builder);
   const ranked = rankMoments(graph, moments, options.ranker);
   const composition = composeAwards(ranked, {
@@ -37,8 +38,8 @@ export function createWrappedReport(
     title: options.title?.trim() || defaultTitle(locale),
     awards: composition.awards,
     metrics: {
-      messages: messages.length,
-      assistantMessages: messages.filter((message) => message.role === "assistant").length,
+      messages: currentMessages.length,
+      assistantMessages: currentMessages.filter((message) => message.role === "assistant").length,
       events: graph.events.length,
       relations: graph.relations.length,
       momentCandidates: moments.length,

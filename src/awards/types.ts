@@ -42,6 +42,7 @@ export type AwardRejectionReason =
   | "below-fun-threshold"
   | "below-confidence-threshold"
   | "not-shareable-repetition"
+  | "not-showable-highlight"
   | "duplicate-award-kind"
   | "overlaps-selected-moment"
   | "overlaps-selected-episode"

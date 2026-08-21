@@ -12,6 +12,8 @@ export interface TranscriptUnit {
 export interface UnitExtractorOptions {
   /** Analyze assistant-visible text only. Defaults to true. */
   assistantOnly?: boolean;
+  /** Include host-retained context predating this session. Defaults to false. */
+  includeInheritedContext?: boolean;
 }
 
 export function normalizeUnitText(text: string): string {
@@ -125,9 +127,11 @@ export function extractTranscriptUnits(
   options: UnitExtractorOptions = {},
 ): TranscriptUnit[] {
   const assistantOnly = options.assistantOnly ?? true;
+  const includeInheritedContext = options.includeInheritedContext ?? false;
   const units: TranscriptUnit[] = [];
 
   messages.forEach((message, messageIndex) => {
+    if (!includeInheritedContext && message.metadata?.inheritedContext === true) return;
     if (assistantOnly && message.role !== "assistant") return;
 
     extractSentenceLikeUnits(message.text).forEach((text, unitIndex) => {

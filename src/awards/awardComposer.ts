@@ -167,9 +167,12 @@ function isShareableRepeatedPattern(moment: RankedMoment): boolean {
       ).length >= requiredTurns;
     }
     if (family === "root-cause-found") {
-      const requiredAssertions = variants.length === 1 ? 1 : 2;
+      // One exact declaration repeated several times is a real tic. For a
+      // paraphrase family, require three actual cause declarations: broad
+      // "confirmed issue / found bug" worklog lines must not inflate a wolf cry.
+      const requiredAssertions = variants.length === 1 ? 1 : 3;
       return variants.filter((text) =>
-        /(?:找到|找到了|定位到|确认了).{0,16}(?:根因|原因|问题|bug|缺陷)|(?:根因|root cause).{0,20}(?:就是|是|找到了|确认了|located|found|is)\b|\b(?:found|located|identified|confirmed).{0,20}\b(?:root cause|issue|problem|bug|defect)\b/iu.test(text),
+        /(?:找到|找到了|定位到|确认了|锁定).{0,16}(?:根因|原因)|(?:根因|原因).{0,20}(?:就是|是|找到|确认|定位|锁定)|(?:root cause|actual cause).{0,20}(?:found|confirmed|identified|located|is)\b|\b(?:found|located|identified|confirmed).{0,20}\b(?:root cause|actual cause)\b/iu.test(text),
       ).length >= requiredAssertions;
     }
     return (moment.count ?? 0) >= 3;
@@ -178,13 +181,77 @@ function isShareableRepeatedPattern(moment: RankedMoment): boolean {
 
   const text = moment.primaryText.trim();
   if (text.length < 4 || text.length > 32) return false;
+  if (/^(?:#{1,6}\s|[-*>]\s|\d+[.)、]\s*|[①-⑳])/u.test(text)) return false;
   if (/[`|/\\]/u.test(text)) return false;
+  if (/^[A-Za-z0-9_.-]+:\s*$/u.test(text)) return false;
+  if (/^[A-Za-z][A-Za-z0-9_.-]{1,24}:\s*[A-Za-z0-9_.-]{1,40}$/u.test(text)) return false;
   if (/\b[A-Za-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*\b/u.test(text)) return false;
-  if (/^(?:(?:全部|任务|工作)?(?:已|已经)?(?:完成|搞定|结束|收尾)(?:了)?)[。！!]?$/u.test(text)) return false;
+  if (/^(?:(?:全部|任务|工作)?(?:已|已经)?(?:完成|搞定|结束|收尾)(?:了)?)[\s\p{P}\p{S}]*$/u.test(text)) return false;
+  if (/^(?:解决方案|你要做的|下一步|处理方式|验证结果|验证配置)[：:]?$/u.test(text)) return false;
+  if (/^(?:(?:核心|审查|检查)?结论(?:属实|不属实|正确|成立|如下)?(?:[，,:：。.!！\s]|$)|(?:重启|运行|执行|打开|关闭|安装|删除)(?:\s|$)|(?:restart|run|execute|open|close|install|delete)\b)/iu.test(text)) return false;
+  if (/^(?:现在)?(?:结构|架构|链路|情况).{0,10}(?:清楚|明确|清晰)(?:了)?[。！!]?$/u.test(text)) return false;
+  if (/^(?:(?:再|重新|继续)(?:测|测试|跑|运行)|(?:retest|rerun|run again))/iu.test(text)) return false;
   if (/(?:^|[\s/])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?:$|[\s,，。])/u.test(text)) return false;
   const humanCharacters = (text.match(/[\p{L}\p{Script=Han}]/gu) ?? []).length;
   const visibleCharacters = (text.match(/[^\s]/gu) ?? []).length;
   return humanCharacters >= 4 && humanCharacters / Math.max(1, visibleCharacters) >= 0.45;
+}
+
+function hasVisibleDramaticTurn(text: string): boolean {
+  return /(?:[！!]{2,}|等等|不对|重大发现|完全错|根本没|离谱|诡异|居然|竟然|高兴早了|wait|hold on|i was wrong|completely wrong|plot twist|ridiculous|weird)/iu.test(text);
+}
+
+function isShareableOneLiner(moment: RankedMoment): boolean {
+  if (moment.type !== "one_liner") return true;
+  const text = moment.primaryText.trim();
+  if (hasVisibleDramaticTurn(text)) return true;
+  if (/^(?:(?:确认了|已确认|核心结论|审查结论|检查结论|结论[:：]|你说得对|抱歉|对不起)(?:[，,:：。.!！\s]|$)|(?:confirmed|conclusion|review result|you(?:'re| are) right|sorry)\b)/iu.test(text)) return false;
+  if (/(?:未发现|没有发现|不存在).{0,48}(?:问题|风险|漏洞|注入|死锁|篡改)|\b(?:no|did not find)\b.{0,40}\b(?:issue|risk|vulnerabilit|problem)\b/iu.test(text)) return false;
+  return true;
+}
+
+function isStandaloneVictoryClaim(text: string): boolean {
+  const trimmed = text.trim();
+  return /^(?:(?:太好了|太棒了|漂亮|完美|搞定)(?:[，,:：。.!！\s]|$)|(?:great news|perfect|nailed it|we got it)\b)/iu.test(trimmed) ||
+    /(?:这次|现在|终于|已经|问题|bug|修复|测试|tests?).{0,36}(?:修好|解决|搞定|没问题|全部通过|全绿|完成|fixed|solved|done|all pass|passed)/iu.test(trimmed) ||
+    /\b\d+\s*\/\s*\d+\b.{0,24}(?:通过|pass(?:ed)?)|(?:通过|pass(?:ed)?).{0,24}\b\d+\s*\/\s*\d+\b/iu.test(trimmed);
+}
+
+function isShareableCorrection(moment: RankedMoment): boolean {
+  if (moment.type !== "plot_twist" && moment.type !== "correction_arc") return true;
+  const text = moment.primaryText.trim();
+  return /(?:等等|等一下|先等等|wait|hold on).{0,36}(?:不对|错|反|wrong|no)/iu.test(text) ||
+    /(?:我|我们|i|we).{0,32}(?:判断|诊断|路线|方向|思路|方案|看|做|搞|改|assumption|diagnosis|approach|direction|plan).{0,16}(?:错|反|偏|有误|wrong|mistake)/iu.test(text) ||
+    /(?:第一轮|上一轮|每次|总是|一直).{0,36}(?:没|没有|失误|坏习惯|错)|(?:没有任何借口|no excuse|bad habit)/iu.test(text);
+}
+
+function isShareableBoomerang(moment: RankedMoment): boolean {
+  if (moment.type !== "boomerang") return true;
+  const visible = [moment.primaryText, ...moment.relatedTexts].join(" → ").trim();
+  if (visible.length > 220) return false;
+  if (visible.length > 140 && /[`*]/u.test(visible)) return false;
+  return true;
+}
+
+function isShowableHighlight(moment: RankedMoment): boolean {
+  if (!isShareableOneLiner(moment)) return false;
+  if (!isShareableCorrection(moment)) return false;
+  if (!isShareableBoomerang(moment)) return false;
+  if (moment.type === "false_dawn" && !isStandaloneVictoryClaim(moment.primaryText)) return false;
+  return true;
+}
+
+function sharesExactVisibleLine(left: RankedMoment, right: RankedMoment): boolean {
+  if (isRepeatedPattern(left) === isRepeatedPattern(right)) return false;
+  const repeated = isRepeatedPattern(left) ? left : right;
+  const other = repeated === left ? right : left;
+  const repeatedLines = [repeated.primaryText, ...repeated.relatedTexts, ...(repeated.variants ?? [])]
+    .map(normalizeText)
+    .filter(Boolean);
+  const otherLines = [other.primaryText, ...other.relatedTexts]
+    .map(normalizeText)
+    .filter(Boolean);
+  return setOverlap(repeatedLines, otherLines).intersection > 0;
 }
 
 function overlapReason(
@@ -198,6 +265,9 @@ function overlapReason(
   for (const item of selected) {
     if (signature.length > 0 && signature === displaySignature(item.moment)) {
       return "overlaps-selected-moment";
+    }
+    if (sharesExactVisibleLine(candidate, item.moment)) {
+      return "overlaps-selected-visible-evidence";
     }
 
     const overlap = setOverlap(candidate.eventIds, item.moment.eventIds);
@@ -325,6 +395,10 @@ export function composeAwards(
     }
     if (!isShareableRepeatedPattern(moment)) {
       rejected.push({ momentId: moment.id, reason: "not-shareable-repetition" });
+      continue;
+    }
+    if (!isShowableHighlight(moment)) {
+      rejected.push({ momentId: moment.id, reason: "not-showable-highlight" });
       continue;
     }
     eligible.push({ moment, kind: awardKindFor(moment) });

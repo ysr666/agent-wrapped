@@ -466,8 +466,33 @@ export function parseDshSessionJsonl(
   if (!id) throw new Error("Invalid DSH session artifact: session header has no id.");
 
   const createdAt = eventTimestamp(header.createdAt);
+  const createdAtMs = number(header.createdAt);
   const cwd = string(header.cwd);
-  const assistantMessages = messages.filter((message) => message.role === "assistant").length;
+  let inheritedMessages = 0;
+  if (createdAtMs !== undefined) {
+    const inheritedBefore = createdAtMs - 1000;
+    for (const message of messages) {
+      const timestamp = message.timestamp ? Date.parse(message.timestamp) : Number.NaN;
+      if (!Number.isFinite(timestamp) || timestamp >= inheritedBefore) continue;
+      message.metadata = { ...message.metadata, inheritedContext: true };
+      inheritedMessages += 1;
+    }
+    for (const event of events) {
+      const timestamp = event.timestamp ? Date.parse(event.timestamp) : Number.NaN;
+      if (!Number.isFinite(timestamp) || timestamp >= inheritedBefore) continue;
+      event.metadata = { ...event.metadata, inheritedContext: true };
+    }
+  }
+  if (inheritedMessages > 0) {
+    diagnostics.push({
+      level: "info",
+      code: "inherited-context-retained",
+      message: `Retained ${inheritedMessages} inherited context messages locally; current-session analysis excludes them.`,
+    });
+  }
+  const assistantMessages = messages.filter(
+    (message) => message.role === "assistant" && message.metadata?.inheritedContext !== true,
+  ).length;
   if (assistantMessages === 0) {
     diagnostics.push({
       level: "warning",

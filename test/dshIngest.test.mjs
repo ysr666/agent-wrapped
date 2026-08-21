@@ -7,6 +7,8 @@ import { join } from "node:path";
 import * as zlib from "node:zlib";
 
 import { parseDshSessionJsonl } from "../dist/ingest/dsh.js";
+import { buildSemanticEvidence } from "../dist/semantic/evidence.js";
+import { createWrappedReport } from "../dist/wrapped/wrappedReport.js";
 import {
   discoverDshSessionFiles,
   loadDshSessions,
@@ -212,6 +214,44 @@ test("P5 keeps DSH host injections local without treating them as human speech",
   assert.equal(session.messages[2].text, "PLUGIN_RUNTIME_SENTINEL");
   assert.equal(session.messages[0].metadata?.sourceKind, "agent-instructions");
   assert.equal(session.events?.[2].metadata?.sourceKind, "plugin");
+});
+
+test("P5 retains forked history locally but excludes it from the current Wrapped", () => {
+  const assistant = (seq, time, text) => JSON.stringify({
+    type: "assistant/message",
+    seq,
+    time,
+    data: {
+      turn: seq,
+      step: 1,
+      message: {
+        id: `assistant-${seq}`,
+        role: "assistant",
+        content: [{ type: "text", text }],
+        source: { kind: "model", provider: "test", model: "test-model" },
+      },
+    },
+  });
+  const jsonl = [
+    JSON.stringify({ type: "session", version: 0, id: "fork-session", createdAt: 10_000 }),
+    assistant(1, 1_000, "这次真的找到根因了！"),
+    assistant(2, 2_000, "真正的根因已经确认了！"),
+    assistant(3, 3_000, "终于定位到根因了！"),
+    assistant(4, 12_000, "我先检查当前会话。"),
+    "",
+  ].join("\n");
+  const session = parseDshSessionJsonl(jsonl);
+
+  assert.equal(session.messages.length, 4, "raw inherited messages remain locally available");
+  assert.equal(session.messages.filter((message) => message.metadata?.inheritedContext === true).length, 3);
+  assert.equal(session.events?.filter((event) => event.metadata?.inheritedContext === true).length, 3);
+  assert.ok(session.diagnostics.some((entry) => entry.code === "inherited-context-retained"));
+  const report = createWrappedReport(session.messages, { locale: "zh-CN" });
+  assert.equal(report.metrics.assistantMessages, 1);
+  assert.equal(report.awards.length, 0, "inherited wolf cries must not become this session's cards");
+  const semantic = buildSemanticEvidence(session);
+  assert.equal(semantic.events.length, 1);
+  assert.equal(semantic.events[0].text, "我先检查当前会话。");
 });
 
 test("P5 resolves the DSH sessions root from DSH_HOME", () => {

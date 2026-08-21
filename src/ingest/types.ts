@@ -20,6 +20,7 @@ export interface IngestionDiagnostic {
     | "truncated-zstd-tail"
     | "assistant-message-shape-unrecognized"
     | "tool-result-shape-unrecognized"
+    | "inherited-context-retained"
     | "no-visible-assistant-messages";
   message: string;
   line?: number;

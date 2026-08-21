@@ -98,7 +98,8 @@ function normalizedEvents(session: IngestedSession): SessionEvent[] {
   const source = session.events && session.events.length > 0
     ? session.events
     : sessionEventsFromMessages(session.messages);
-  return [...source].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  return source.filter((event) => event.metadata?.inheritedContext !== true)
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
 }
 
 function failureCue(text: string | undefined): boolean {

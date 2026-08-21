@@ -279,12 +279,217 @@ test("P3.5 rejects a repeated routine completion notice", () => {
       score: 80,
       count: 3,
     }),
+    ranked({
+      id: "all-done-emoji",
+      type: "repeated_pattern",
+      text: "全部完成 ✅",
+      events: ["done-emoji-1", "done-emoji-2", "done-emoji-3"],
+      score: 79,
+      count: 3,
+    }),
   ]);
 
   assert.equal(result.awards.length, 0);
   assert.ok(result.rejected.some((candidate) =>
     candidate.momentId === "all-done" && candidate.reason === "not-shareable-repetition",
   ));
+  assert.ok(result.rejected.some((candidate) =>
+    candidate.momentId === "all-done-emoji" && candidate.reason === "not-shareable-repetition",
+  ));
+});
+
+test("P3.5 rejects audit conclusions, routine corrections, and technical command labels", () => {
+  const result = composeAwards([
+    ranked({
+      id: "audit-conclusion",
+      type: "one_liner",
+      text: "核心结论：未发现注入、死锁或文件篡改问题。",
+      events: ["audit"],
+      score: 90,
+      evidence: ["confidence_claim:80"],
+    }),
+    ranked({
+      id: "routine-correction",
+      type: "correction_arc",
+      text: "你说得对，我上一条里‘本地’这个词用得含糊了。",
+      related: ["之前的说明。", "现在换个说法。"],
+      events: ["before", "pivot", "after"],
+      score: 88,
+    }),
+    ranked({
+      id: "restart-command",
+      type: "repeated_pattern",
+      text: "重启 dsh web",
+      events: ["restart-1", "restart-2", "restart-3"],
+      score: 84,
+      count: 7,
+    }),
+    ranked({
+      id: "config-label",
+      type: "repeated_pattern",
+      text: "provider: deepseek",
+      events: ["config-1", "config-2", "config-3"],
+      score: 82,
+      count: 6,
+    }),
+    ranked({
+      id: "structure-clear",
+      type: "repeated_pattern",
+      text: "现在结构清楚了。",
+      events: ["structure-1", "structure-2", "structure-3"],
+      score: 80,
+      count: 3,
+    }),
+    ranked({
+      id: "rerun-command",
+      type: "repeated_pattern",
+      text: "再测（命令不变）",
+      events: ["rerun-1", "rerun-2", "rerun-3"],
+      score: 78,
+      count: 3,
+    }),
+    ranked({
+      id: "repeated-heading",
+      type: "repeated_pattern",
+      text: "② dsh-recommend 🏅 精选认证（Issue）",
+      events: ["heading-1", "heading-2", "heading-3"],
+      score: 76,
+      count: 3,
+    }),
+    ranked({
+      id: "generic-heading",
+      type: "repeated_pattern",
+      text: "解决方案",
+      events: ["solution-1", "solution-2", "solution-3"],
+      score: 74,
+      count: 3,
+    }),
+    ranked({
+      id: "validation-heading",
+      type: "repeated_pattern",
+      text: "验证配置",
+      events: ["validation-1", "validation-2", "validation-3"],
+      score: 73,
+      count: 3,
+    }),
+  ]);
+
+  assert.equal(result.awards.length, 0);
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "audit-conclusion" && candidate.reason === "not-showable-highlight"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "routine-correction" && candidate.reason === "not-showable-highlight"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "restart-command" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "config-label" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "structure-clear" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "rerun-command" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "repeated-heading" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "generic-heading" && candidate.reason === "not-shareable-repetition"));
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "validation-heading" && candidate.reason === "not-shareable-repetition"));
+});
+
+test("P3.5 rejects an unreadable technical boomerang but keeps a concise reversal", () => {
+  const result = composeAwards([
+    ranked({
+      id: "technical-boomerang",
+      type: "boomerang",
+      text: "provider 下拉排除 `openrouter`、`DeepSeek`、`vision-http`，但保留 `deepseek-official` 预置条目。",
+      related: ["后来又说 `DeepSeek-V4-Flash/Pro` 两条必须保留，因为 `provider.model.route` 仍依赖它们。"],
+      events: ["technical-before", "technical-after"],
+      score: 94,
+    }),
+    ranked({
+      id: "cache-boomerang",
+      type: "boomerang",
+      text: "可以完全排除缓存。",
+      related: ["最终根因还是缓存。"],
+      events: ["cache-before", "cache-after"],
+      score: 90,
+    }),
+  ]);
+
+  assert.deepEqual(result.awards.map((award) => award.momentId), ["cache-boomerang"]);
+  assert.ok(result.rejected.some((candidate) =>
+    candidate.momentId === "technical-boomerang" && candidate.reason === "not-showable-highlight",
+  ));
+});
+
+test("P3.5 does not repeat one wolf-cry line as a separate quote", () => {
+  const repeated = ranked({
+    id: "wolf",
+    type: "repeated_pattern",
+    text: "根因确认：第一处是缓存。",
+    related: ["找到真正的根因了！", "原因找到了：第二处是配置。"],
+    variants: ["根因确认：第一处是缓存。", "找到真正的根因了！", "原因找到了：第二处是配置。"],
+    events: ["cause-1", "cause-2", "cause-3"],
+    score: 90,
+    family: "root-cause-found:positive",
+    count: 3,
+  });
+  const quote = ranked({
+    id: "duplicate-quote",
+    type: "one_liner",
+    text: "找到真正的根因了！",
+    events: ["cause-2"],
+    score: 70,
+    evidence: ["discovery_claim:90"],
+  });
+  const result = composeAwards([repeated, quote]);
+
+  assert.deepEqual(result.awards.map((award) => award.momentId), ["wolf"]);
+  assert.ok(result.rejected.some((candidate) =>
+    candidate.momentId === "duplicate-quote" && candidate.reason === "overlaps-selected-visible-evidence",
+  ));
+});
+
+test("P3.5 requires a real victory claim for false dawns", () => {
+  const result = composeAwards([
+    ranked({
+      id: "buried-perfect",
+      type: "false_dawn",
+      text: "建议把这个模型放到第一位，本次实测读图完美。",
+      related: ["我之前改错了对象。"],
+      events: ["recommendation", "admission"],
+      score: 92,
+    }),
+    ranked({
+      id: "tests-passed-but-ui-broke",
+      type: "false_dawn",
+      text: "26/26 通过，两个问题都已修复。",
+      related: ["等等，箭头方向全反了。"],
+      events: ["passed", "visual-failure"],
+      score: 90,
+    }),
+  ]);
+
+  assert.deepEqual(result.awards.map((award) => award.momentId), ["tests-passed-but-ui-broke"]);
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "buried-perfect" && candidate.reason === "not-showable-highlight"));
+});
+
+test("P3.5 wolf cry needs repeated cause declarations, not heterogeneous bug worklog", () => {
+  const result = composeAwards([
+    ranked({
+      id: "heterogeneous-bugs",
+      type: "repeated_pattern",
+      text: "Root cause found.",
+      events: ["mixed-1", "mixed-2", "mixed-3"],
+      score: 92,
+      family: "root-cause-found:positive",
+      count: 3,
+      variants: ["Root cause found.", "Confirmed — the bug ships in v1.5.2.", "Found a real plugin bug."],
+    }),
+    ranked({
+      id: "three-real-causes",
+      type: "repeated_pattern",
+      text: "这次真的找到根因了。",
+      events: ["cause-1", "cause-2", "cause-3"],
+      score: 88,
+      family: "root-cause-found:positive",
+      count: 3,
+      variants: ["这次真的找到根因了。", "真正的根因已经确认了。", "终于定位到根因了。"],
+    }),
+  ]);
+
+  assert.deepEqual(result.awards.map((award) => award.momentId), ["three-real-causes"]);
+  assert.ok(result.rejected.some((candidate) => candidate.momentId === "heterogeneous-bugs" && candidate.reason === "not-shareable-repetition"));
 });
 
 test("P3.5 keeps the strongest visible story instead of repeating its constituent lines", () => {
