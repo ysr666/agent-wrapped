@@ -1,0 +1,274 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  composeWrappedCards,
+  generateComposedWrapped,
+} from "../dist/index.js";
+
+function scores(funScore = 90) {
+  return {
+    funScore,
+    confidence: 94,
+    standaloneQuality: 90,
+    contextPayoff: 90,
+    surprise: 90,
+    rarity: 80,
+    readability: 90,
+    structuralStrength: 94,
+  };
+}
+
+function award(overrides = {}) {
+  return {
+    id: "award:premature",
+    kind: "premature-celebration",
+    title: "香槟开早了",
+    emoji: "🍾",
+    momentId: "false_dawn:m0->m1",
+    sourceType: "false_dawn",
+    messageIndexes: [0, 1],
+    primaryText: "这次已经修好了。",
+    relatedTexts: ["还是失败。"],
+    funScore: 92,
+    confidence: 94,
+    scores: scores(92),
+    evidence: ["celebration followed by reversal"],
+    ...overrides,
+  };
+}
+
+function awardReport(awards = []) {
+  return {
+    version: 1,
+    locale: "zh-CN",
+    title: "今晚的 Agent Wrapped",
+    awards,
+    metrics: {
+      messages: 0,
+      assistantMessages: 0,
+      events: 0,
+      relations: 0,
+      momentCandidates: 0,
+      rankedMoments: 0,
+      awards: awards.length,
+      topFunScore: awards[0]?.funScore ?? 0,
+    },
+    diagnostics: { rejectedAwards: [] },
+  };
+}
+
+function semanticEvidence(sessionId, events, windows = []) {
+  return {
+    version: 2,
+    sessionId,
+    host: "dsh",
+    locale: "zh-CN",
+    events,
+    windows,
+    momentHints: [],
+    redactionCount: 0,
+    truncated: false,
+  };
+}
+
+function semanticReport(sessionId, stories, extra = {}) {
+  return {
+    version: 3,
+    locale: "zh-CN",
+    sessionId,
+    stories,
+    personaSignals: [],
+    evidenceUsed: stories.flatMap((story) => story.evidenceIds),
+    ...extra,
+  };
+}
+
+test("Wrapped Composer keeps one card for P4/P8 views of the same episode", () => {
+  const session = {
+    id: "duplicate-routes",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "这次已经修好了。" },
+      { role: "user", host: "dsh", text: "还是失败。" },
+    ],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "这次已经修好了。" },
+      { id: "failure", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "还是失败。" },
+    ],
+  };
+  const story = {
+    id: "story:0",
+    windowId: "window:0",
+    arcKind: "false_dawn",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:claim"] },
+      { kind: "failure", evidenceIds: ["event:failure"] },
+    ],
+    evidenceIds: ["event:claim", "event:failure"],
+    confidence: "high",
+  };
+  const evidence = semanticEvidence(session.id, [
+    { id: "event:claim", order: 0, actor: "assistant", kind: "assistant_text", text: "这次已经修好了。" },
+    { id: "event:failure", order: 1, actor: "user", kind: "user_message", text: "还是失败。" },
+  ]);
+  const report = composeWrappedCards(
+    session,
+    awardReport([award()]),
+    semanticReport(session.id, [story]),
+    evidence,
+  );
+
+  assert.equal(report.cards.length, 1);
+  assert.equal(report.cards[0].type, "award");
+  assert.ok(report.diagnostics.suppressed.some((entry) =>
+    entry.reason === "cross-route-duplicate" && entry.winnerId === report.cards[0].id
+  ));
+});
+
+test("Wrapped Composer groups repeated arcs by episode, never by beat count", () => {
+  const session = {
+    id: "repeated-finales",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "本轮闭环完成。" },
+      { role: "user", host: "dsh", text: "等下，又有一个 bug。" },
+      { role: "assistant", host: "dsh", text: "发布闭环完成。" },
+      { role: "user", host: "dsh", text: "再排查一个问题。" },
+    ],
+    events: [
+      { id: "close-1", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0 },
+      { id: "reopen-1", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1 },
+      { id: "close-2", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2 },
+      { id: "reopen-2", host: "dsh", actor: "user", kind: "user_message", order: 3, messageIndex: 3 },
+    ],
+  };
+  const stories = [0, 1].map((index) => ({
+    id: `story:${index}`,
+    windowId: `window:${index}`,
+    arcKind: "ending_then_more_work",
+    beats: [
+      { kind: "claim", evidenceIds: [`event:close-${index + 1}`] },
+      { kind: "work_reopened", evidenceIds: [`event:reopen-${index + 1}`] },
+    ],
+    evidenceIds: [`event:close-${index + 1}`, `event:reopen-${index + 1}`],
+    confidence: "medium",
+  }));
+  const evidence = semanticEvidence(session.id, [
+    { id: "event:close-1", order: 0, actor: "assistant", kind: "assistant_text", text: "本轮闭环完成。" },
+    { id: "event:reopen-1", order: 1, actor: "user", kind: "user_message", text: "等下，又有一个 bug。" },
+    { id: "event:close-2", order: 2, actor: "assistant", kind: "assistant_text", text: "发布闭环完成。" },
+    { id: "event:reopen-2", order: 3, actor: "user", kind: "user_message", text: "再排查一个问题。" },
+  ]);
+  const grouped = composeWrappedCards(session, awardReport(), semanticReport(session.id, stories), evidence);
+
+  assert.equal(grouped.cards.length, 1);
+  assert.equal(grouped.cards[0].type, "story");
+  assert.equal(grouped.cards[0].episodeCount, 2);
+  assert.equal(grouped.cards[0].storyIds.length, 2);
+  assert.match(grouped.cards[0].title, /× 2/u);
+  assert.match(grouped.cards[0].commentary, /2 次大结局/u);
+
+  const fourBeatStory = {
+    ...stories[0],
+    id: "story:four-beats",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:close-1"] },
+      { kind: "attempt", evidenceIds: ["event:close-1"] },
+      { kind: "failure", evidenceIds: ["event:reopen-1"] },
+      { kind: "work_reopened", evidenceIds: ["event:reopen-1"] },
+    ],
+  };
+  const single = composeWrappedCards(
+    session,
+    awardReport(),
+    semanticReport(session.id, [fourBeatStory]),
+    evidence,
+  );
+  assert.equal(single.cards[0].type, "story");
+  assert.equal(single.cards[0].episodeCount, 1);
+});
+
+test("Wrapped Composer does not force filler cards or an unsupported persona", () => {
+  const session = {
+    id: "ordinary-session",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [{ role: "assistant", host: "dsh", text: "我先检查配置。" }],
+  };
+  const evidence = semanticEvidence(session.id, []);
+  const empty = composeWrappedCards(session, awardReport(), semanticReport(session.id, []), evidence);
+  assert.equal(empty.cards.length, 0);
+
+  const weakPersona = semanticReport(session.id, [], {
+    personaSignals: [{ key: "dramaticity", label: "内心戏", count: 1, level: "low", evidenceIds: [] }],
+    narration: {
+      storyCards: [],
+      persona: { label: "本场表现像侦探", tagline: "检查了一次配置。" },
+    },
+  });
+  const composed = composeWrappedCards(session, awardReport(), weakPersona, evidence);
+  assert.equal(composed.cards.length, 0);
+  assert.ok(composed.diagnostics.suppressed.some((entry) => entry.reason === "weak-persona"));
+});
+
+test("Wrapped Composer caps the final highlight reel at five cards", () => {
+  const session = {
+    id: "many-candidates",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: Array.from({ length: 6 }, (_, index) => ({
+      role: "assistant",
+      host: "dsh",
+      text: `独立金句 ${index}：这是一段足够长而且互不重复的候选台词。`,
+    })),
+  };
+  const awards = Array.from({ length: 6 }, (_, index) => award({
+    id: `award:${index}`,
+    kind: "quote",
+    messageIndexes: [index],
+    primaryText: session.messages[index].text,
+    relatedTexts: [],
+    funScore: 90 - index,
+  }));
+  const composed = composeWrappedCards(
+    session,
+    awardReport(awards),
+    semanticReport(session.id, []),
+    semanticEvidence(session.id, []),
+  );
+
+  assert.equal(composed.cards.length, 5);
+  assert.equal(composed.diagnostics.suppressed.filter((entry) => entry.reason === "card-limit").length, 1);
+});
+
+test("generateComposedWrapped runs both candidate routes and returns the final card set", async () => {
+  const session = {
+    id: "composed-end-to-end",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "本轮排查闭环完成。" },
+      { role: "user", host: "dsh", text: "等下，又有一个 bug 要看。" },
+    ],
+    events: [
+      { id: "close", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "本轮排查闭环完成。" },
+      { id: "reopen", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "等下，又有一个 bug 要看。" },
+    ],
+  };
+  const generated = await generateComposedWrapped(session, { async generate() { return "{}"; } }, {
+    semantic: { coverageWindows: 0 },
+  });
+
+  assert.equal(generated.awardReport.awards.length, 0);
+  assert.equal(generated.semanticReport.stories.length, 1);
+  assert.equal(generated.report.cards.length, 1);
+  assert.equal(generated.report.cards[0].type, "story");
+});

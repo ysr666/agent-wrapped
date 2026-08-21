@@ -46,7 +46,7 @@ Observable SessionEvent[] ──────────────────
   │                                                     │ editorial language only
   └────────────────────────→ Entertainment Candidate Pool ←┘
                                   ↓
-                     Wrapped Composer (next product layer)
+                     deterministic Wrapped Composer
                                   ↓
                   best 3–5 optional cards, never a replay
 ```
@@ -65,6 +65,7 @@ A P3 Moment can help P8 choose context, but it is only a **secondary hint**. It 
 - ✅ **P6 — Real-session evaluation / calibration**: bounded human-review cases, deterministic A/B comparisons, keep/drop/skip, fun ratings and missed moments.
 - ✅ **P7 — Local Evaluation Runner**: resumable workspace/CLI with review-protocol + locale isolation and language-bias safeguards.
 - 🧪 **P8 — Story + session persona**: opt-in, event-first semantic candidate route. Story Miner proposes structure, local code validates truth and then admits only distinctive human-visible turns; routine tool worklogs produce no Story or Persona card. A second narrator may only write editorial titles/commentary/nicknames for admitted candidates.
+- 🧪 **Wrapped Composer**: lets admitted P4 Awards and P8 Stories compete for one dynamic 0–5 card highlight reel, groups repeated same-arc episodes into one story card, removes cross-route views of the same evidence, and never invents filler to reach a quota.
 
 ## P7 quick start
 
@@ -212,7 +213,7 @@ export AGENT_WRAPPED_INCLUDE_REASONING=1
 
 `story:latest` prints the number of bounded events/windows, secondary Moment hints, redaction count and truncation state before semantic generation. A normal P8 run may make **two** semantic calls: Story Miner, then Narrator only after local validation and local Wrapped admission. The full DSH transcript is not included in either request.
 
-P8 is still experimental and is not part of P7 calibration yet. P4 awards and P8 candidates do not yet compete in one cross-route final composer; that is deliberately deferred until real-session calibration shows the candidate pool is both truthful and worth showing.
+P8 is still experimental and is not part of P7 calibration yet. The opt-in Wrapped Composer now lets P4 Awards and P8 candidates compete in one final card set. It is intentionally conservative: weak sessions may produce no cards, stories are grouped by independently grounded episode rather than beat/window count, and overlapping P4/P8 views of the same evidence are shown once.
 
 ## Public APIs
 
@@ -275,6 +276,18 @@ const { report, evidence } = await generateSemanticStoryPersona(
 console.log(renderSemanticStoryPersonaText(report, evidence));
 ```
 
+Opt-in cross-route Wrapped Composer:
+
+```ts
+const { narrator } = createOpenAICompatibleNarratorFromEnv();
+const { report } = await generateComposedWrapped(session, narrator, {
+  semantic: { topMoments: 6 },
+  composer: { maxCards: 5 },
+});
+
+console.log(report.cards);
+```
+
 Existing QuoteScorer, CatchphraseClusterer, BoomerangDetector, FacetScorer, and SessionAnalyzer APIs remain compatibility surfaces while new work uses the Moment Engine.
 
 ## Host coverage
@@ -326,11 +339,12 @@ npm run test:review
 npm run test:p5-p6
 npm run test:p7
 npm run test:p8
+npm run test:composer
 ```
 
 ## Status
 
-🚧 Early prototype. P0–P7 are implemented. P8 is an opt-in candidate route. The next evidence should come from side-by-side real-session review: does event-first Story Discovery recover the “剧情 + 人格” people actually enjoy, and is the added value worth its cost/latency/privacy tradeoff? If yes, the next engineering work is an explicit P8 human evaluation and then a cross-route Wrapped Composer — not more award-specific regex detectors.
+🚧 Early prototype. P0–P7 are implemented. P8 and the cross-route Wrapped Composer are opt-in. The next evidence should come from reviewing the composed 0–5 card highlight reel on more real sessions: does it make people laugh and immediately recognize “它刚才就是这个德行,” without losing the privacy/truth guarantees? Candidate extraction is no longer the only question; final entertainment ranking and presentation now need direct calibration.
 
 ## License
 
