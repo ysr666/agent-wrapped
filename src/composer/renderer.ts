@@ -40,12 +40,39 @@ const EN_BEATS: Record<StoryBeatKind, string> = {
   reversal: "Reversal",
 };
 
-function clip(text: string, max = 140): string {
-  const normalized = text.replace(/\s+/gu, " ").trim();
+function plainNarrativeText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/gu, " ")
+    .replace(/`([^`\n]+)`/gu, "$1")
+    .replace(/\[([^\]]+)\]\([^\s)]+\)/gu, "$1")
+    .replace(/(?:\*\*|__)(.+?)(?:\*\*|__)/gu, "$1")
+    .replace(/^\s*#{1,6}\s+/gmu, "")
+    .replace(/^\s*[-*+]\s+/gmu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function clip(text: string, max: number): string {
+  const normalized = plainNarrativeText(text);
   return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1)}…`;
 }
 
-function safeEventExcerpt(event: SemanticEvidenceBundle["events"][number]): string | undefined {
+function narrativeExcerptLimit(
+  beatKind: StoryBeatKind,
+  actor: SemanticEvidenceBundle["events"][number]["actor"],
+): number {
+  if (actor === "user") return 96;
+  if (beatKind === "user_pushback" || beatKind === "work_reopened") return 96;
+  if (beatKind === "breakdown" || beatKind === "correction" || beatKind === "reversal") return 88;
+  if (beatKind === "failure" || beatKind === "block" || beatKind === "capability_gap") return 84;
+  if (beatKind === "workaround" || beatKind === "recovery") return 80;
+  return 72;
+}
+
+function safeEventExcerpt(
+  event: SemanticEvidenceBundle["events"][number],
+  beatKind: StoryBeatKind,
+): string | undefined {
   if (event.kind === "tool_call" || event.kind === "tool_result" || event.kind === "tool_error") {
     if (!event.toolName) return undefined;
     const details = [
@@ -55,7 +82,7 @@ function safeEventExcerpt(event: SemanticEvidenceBundle["events"][number]): stri
     ].filter((value): value is string => value !== undefined);
     return `${event.toolName}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
   }
-  return event.text ? clip(event.text) : undefined;
+  return event.text ? clip(event.text, narrativeExcerptLimit(beatKind, event.actor)) : undefined;
 }
 
 function storyLines(
@@ -74,7 +101,7 @@ function storyLines(
       const excerpts = beat.evidenceIds
         .map((id) => eventById.get(id))
         .filter((event): event is SemanticEvidenceBundle["events"][number] => !!event)
-        .map(safeEventExcerpt)
+        .map((event) => safeEventExcerpt(event, beat.kind))
         .filter((text): text is string => !!text);
       lines.push(`  ${card.episodeCount > 1 ? "  " : ""}→ ${label}${excerpts.length > 0 ? ` — ${excerpts.join(" / ")}` : ""}`);
     }

@@ -235,6 +235,53 @@ test("composed renderer never prints raw tool payload text", () => {
   assert.doesNotMatch(rendered, /SOURCE_SENTINEL|RESULT_SENTINEL/u);
 });
 
+test("composed renderer keeps the punchline ahead of long technical evidence", () => {
+  const session = {
+    id: "shareable-story",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [],
+  };
+  const story = {
+    id: "story:shareable",
+    windowId: "window:shareable",
+    arcKind: "false_dawn",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:claim"] },
+      { kind: "user_pushback", evidenceIds: ["event:pushback"] },
+    ],
+    evidenceIds: ["event:claim", "event:pushback"],
+    confidence: "high",
+  };
+  const evidence = semanticEvidence(session.id, [
+    {
+      id: "event:claim",
+      order: 0,
+      actor: "assistant",
+      kind: "assistant_text",
+      text: "修好了 ✅ **根因已经彻底确认**：`conditionalHook()` 的调用顺序在复杂配置下发生变化，并且逐项核对了所有配置分支与运行状态。后面还有一整段不适合占满分享卡片的技术分析。",
+    },
+    {
+      id: "event:pushback",
+      order: 1,
+      actor: "user",
+      kind: "user_message",
+      text: "我选不了供应商",
+    },
+  ]);
+  const report = composeWrappedCards(session, awardReport(), semanticReport(session.id, [story]), evidence);
+  const rendered = renderComposedWrappedText(report, evidence);
+  const claimLine = rendered.split("\n").find((line) => line.includes("下结论"));
+
+  assert.ok(claimLine);
+  assert.ok(claimLine.length <= 85, `claim line should stay compact: ${claimLine}`);
+  assert.match(rendered, /修好了 ✅ 根因已经彻底确认：conditionalHook\(\)/u);
+  assert.match(rendered, /用户打脸 — 我选不了供应商/u);
+  assert.doesNotMatch(rendered, /\*\*|`|一整段不适合/u);
+});
+
 test("Wrapped Composer does not force filler cards or an unsupported persona", () => {
   const session = {
     id: "ordinary-session",
