@@ -187,16 +187,16 @@ export async function generateSemanticStoryPersona(
     };
   }
 
-  const miningRaw = await narrator.generate(buildStoryMinerPrompt(evidence));
   let mining: ReturnType<typeof parseStoryMinerOutput>;
   try {
+    const miningRaw = await narrator.generate(buildStoryMinerPrompt(evidence));
     mining = parseStoryMinerOutput(miningRaw);
   } catch {
     mining = {
       candidates: [],
       insufficientEvidence: evidence.locale === "zh-CN"
-        ? "Story Miner 没有返回可用的结构化结果。"
-        : "Story Miner returned no usable structured result.",
+        ? "Story Miner 暂时不可用，已仅使用本地确定性证据。"
+        : "Story Miner was unavailable; only deterministic local evidence was used.",
     };
   }
   // Local high-precision candidates are a recall floor, not an all-or-nothing

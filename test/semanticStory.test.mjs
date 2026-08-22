@@ -1494,6 +1494,38 @@ test("verified structure survives an unavailable editorial narration call", asyn
   assert.equal(report.narrationUnavailable, true);
 });
 
+test("a failed Story Miner call falls back to deterministic local evidence", async () => {
+  const caughtSession = {
+    id: "miner-timeout-caught-slacking",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "搞定了，UI 折叠和现有测试都通过。" },
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "合着你前面除了 UI 啥也没改啥也没测？" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 2, messageIndex: 2, text: "你说得对，之前是我偷懒了，只盯着 UI。" },
+    ],
+  };
+  const ordinarySession = {
+    ...caughtSession,
+    id: "miner-timeout-ordinary",
+    events: [
+      { id: "human", host: "dsh", actor: "user", kind: "user_message", order: 0, messageIndex: 0, text: "把标题颜色换成红色。" },
+      { id: "reply", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, messageIndex: 1, text: "好的，我来调整配色。" },
+    ],
+  };
+  const unavailableNarrator = { async generate() { throw new DOMException("timed out", "AbortError"); } };
+
+  const caught = await generateSemanticStoryPersona(caughtSession, unavailableNarrator, { coverageWindows: 0 });
+  const ordinary = await generateSemanticStoryPersona(ordinarySession, unavailableNarrator, { coverageWindows: 0 });
+
+  assert.equal(caught.report.stories.length, 1);
+  assert.equal(caught.report.narrationUnavailable, true);
+  assert.equal(ordinary.report.stories.length, 0);
+  assert.match(ordinary.report.insufficientEvidence, /本地确定性证据/u);
+});
+
 test("OpenAI-compatible narrator is opt-in and sends only the supplied prompt", async () => {
   let captured;
   const narrator = createOpenAICompatibleNarrator({

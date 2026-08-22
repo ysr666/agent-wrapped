@@ -213,7 +213,7 @@ test("CLI renders the final composed Wrapped and supports privacy-safe JSON insp
   assert.match(parsed.sessions[0].rendered, /本场剧情/u);
 });
 
-test("CLI keeps inspecting later sessions when one semantic call fails", async () => {
+test("CLI falls back locally and keeps inspecting later sessions when semantic calls fail", async () => {
   const failing = {
     id: "cli-failing-session",
     host: "dsh",
@@ -245,9 +245,10 @@ test("CLI keeps inspecting later sessions when one semantic call fails", async (
     semanticNarrator: { async generate() { throw new Error("endpoint timeout"); } },
   });
 
-  assert.equal(code, 1);
+  assert.equal(code, 0);
   assert.match(stderr.value(), /Wrapped 1\/2/u);
   assert.match(stderr.value(), /Wrapped 2\/2/u);
-  assert.match(stdout.value(), /生成失败：Error: endpoint timeout/u);
+  assert.doesNotMatch(stdout.value(), /生成失败/u);
+  assert.match(stdout.value(), /本场剧情/u);
   assert.match(stdout.value(), /这场暂时没有强到值得上榜的名场面/u);
 });
