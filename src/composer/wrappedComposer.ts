@@ -27,6 +27,7 @@ interface Candidate {
   card: ComposedWrappedCard;
   messageIndexes: Set<number>;
   texts: string[];
+  editorialTexts: string[];
 }
 
 const STORY_BASE_SCORE: Record<StoryArcKind, number> = {
@@ -90,6 +91,56 @@ function textsOverlap(left: string[], right: string[]): boolean {
   ));
 }
 
+function editorialTextOverlap(left: string, right: string): boolean {
+  const hanCharacters = (text: string): string[] => [...text.normalize("NFKC")]
+    .filter((character) => /\p{Script=Han}/u.test(character));
+  const leftHan = hanCharacters(left);
+  const rightHan = hanCharacters(right);
+  if (leftHan.length >= 6 && rightHan.length >= 6) {
+    const bigrams = (characters: string[]): Set<string> => new Set(
+      characters.slice(0, -1).map((character, index) => `${character}${characters[index + 1]}`),
+    );
+    const leftBigrams = bigrams(leftHan);
+    const rightBigrams = bigrams(rightHan);
+    const shared = [...leftBigrams].filter((bigram) => rightBigrams.has(bigram)).length;
+    const shorter = Math.min(leftBigrams.size, rightBigrams.size);
+    return shared >= 3 && shorter > 0 && shared / shorter >= 0.2;
+  }
+
+  const stopwords = new Set(["agent", "session", "this", "that", "with", "from", "then", "like"]);
+  const words = (text: string): Set<string> => new Set(
+    (text.normalize("NFKC").toLocaleLowerCase().match(/[a-z][a-z0-9'-]{2,}/gu) ?? [])
+      .filter((word) => !stopwords.has(word)),
+  );
+  const leftWords = words(left);
+  const rightWords = words(right);
+  const shared = [...leftWords].filter((word) => rightWords.has(word)).length;
+  const shorter = Math.min(leftWords.size, rightWords.size);
+  return shared >= 2 && shorter > 0 && shared / shorter >= 0.4;
+}
+
+function personaRepeatsSelectedEditorial(persona: Candidate, selected: Candidate[]): Candidate | undefined {
+  return selected.find((winner) => winner.card.type !== "persona" &&
+    persona.editorialTexts.some((personaText) => winner.editorialTexts.some((winnerText) =>
+      editorialTextOverlap(personaText, winnerText)
+    ))
+  );
+}
+
+function hasUnbalancedDisplayMarks(text: string): boolean {
+  const count = (needle: string): number => text.split(needle).length - 1;
+  return count("**") % 2 !== 0 ||
+    count("`") % 2 !== 0 ||
+    count("「") !== count("」") ||
+    count("“") !== count("”");
+}
+
+function unreadableAwardCandidate(candidate: Candidate): boolean {
+  if (candidate.card.type !== "award" || candidate.card.award.sourceType !== "correction_arc") return false;
+  return [candidate.card.award.primaryText, ...candidate.card.award.relatedTexts]
+    .some(hasUnbalancedDisplayMarks);
+}
+
 function candidatesOverlap(left: Candidate, right: Candidate): boolean {
   if ([...left.messageIndexes].some((index) => right.messageIndexes.has(index))) return true;
   return textsOverlap(left.texts, right.texts);
@@ -128,6 +179,7 @@ function awardCandidate(
       .map((index) => currentToOriginal[index])
       .filter((index): index is number => index !== undefined)),
     texts: [award.primaryText, ...award.relatedTexts],
+    editorialTexts: [award.title, award.primaryText, ...award.relatedTexts],
   };
 }
 
@@ -185,6 +237,7 @@ function storyCandidate(
     texts: evidenceIds
       .map((id) => semanticEventById.get(id)?.text)
       .filter((text): text is string => !!text),
+    editorialTexts: [title, commentary].filter((text): text is string => !!text),
   };
 }
 
@@ -204,7 +257,12 @@ function personaCandidate(report: SemanticStoryPersonaReport): Candidate | undef
     tagline: persona.tagline,
     signals: report.personaSignals,
   };
-  return { card, messageIndexes: new Set(), texts: [persona.label, persona.tagline] };
+  return {
+    card,
+    messageIndexes: new Set(),
+    texts: [persona.label, persona.tagline],
+    editorialTexts: [persona.label, persona.tagline],
+  };
 }
 
 function candidateOrder(left: Candidate, right: Candidate): number {
@@ -247,6 +305,10 @@ export function composeWrappedCards(
   const suppressed: ComposedWrappedReport["diagnostics"]["suppressed"] = [];
   let storyCards = 0;
   for (const candidate of candidates.sort(candidateOrder)) {
+    if (unreadableAwardCandidate(candidate)) {
+      suppressed.push({ id: candidate.card.id, reason: "unreadable-card" });
+      continue;
+    }
     if (candidate.card.type === "story" && storyCards >= maxStoryCards) {
       suppressed.push({ id: candidate.card.id, reason: "story-card-limit" });
       continue;
@@ -260,6 +322,13 @@ export function composeWrappedCards(
     if (duplicate) {
       suppressed.push({ id: candidate.card.id, reason: "cross-route-duplicate", winnerId: duplicate.card.id });
       continue;
+    }
+    if (candidate.card.type === "persona") {
+      const duplicate = personaRepeatsSelectedEditorial(candidate, selected);
+      if (duplicate) {
+        suppressed.push({ id: candidate.card.id, reason: "editorial-duplicate", winnerId: duplicate.card.id });
+        continue;
+      }
     }
     if (selected.length >= maxCards) {
       suppressed.push({ id: candidate.card.id, reason: "card-limit" });

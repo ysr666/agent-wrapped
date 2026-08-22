@@ -306,6 +306,108 @@ test("Wrapped Composer does not force filler cards or an unsupported persona", (
   assert.ok(composed.diagnostics.suppressed.some((entry) => entry.reason === "weak-persona"));
 });
 
+test("Wrapped Composer removes unreadable correction prose and a Persona that repeats the Story joke", () => {
+  const session = {
+    id: "clean-final-show",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "user", host: "dsh", text: "你第一轮竟然没看图。" },
+      { role: "assistant", host: "dsh", text: "第一轮没看是我的失误。" },
+    ],
+    events: [
+      { id: "pushback", host: "dsh", actor: "user", kind: "user_message", order: 0, messageIndex: 0, text: "你第一轮竟然没看图。" },
+      { id: "admission", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, messageIndex: 1, text: "第一轮没看是我的失误。" },
+    ],
+  };
+  const story = {
+    id: "story:callout",
+    windowId: "window:callout",
+    arcKind: "user_pushback_then_recovery",
+    beats: [
+      { kind: "user_pushback", evidenceIds: ["event:pushback"] },
+      { kind: "correction", evidenceIds: ["event:admission"] },
+    ],
+    evidenceIds: ["event:pushback", "event:admission"],
+    confidence: "high",
+  };
+  const evidence = semanticEvidence(session.id, [
+    { id: "event:pushback", order: 0, actor: "user", kind: "user_message", text: "你第一轮竟然没看图。" },
+    { id: "event:admission", order: 1, actor: "assistant", kind: "assistant_text", text: "第一轮没看是我的失误。" },
+  ]);
+  const technicalCorrection = award({
+    id: "award:broken-correction",
+    kind: "plot-twist",
+    sourceType: "correction_arc",
+    primaryText: "我之前改错了对象。",
+    relatedTexts: ["找到了——设置页里这条**「无法读取图片能力声明。", "现在把**真正目标**修好了。"],
+    messageIndexes: [],
+    funScore: 85,
+  });
+  const report = composeWrappedCards(
+    session,
+    awardReport([technicalCorrection]),
+    semanticReport(session.id, [story], {
+      personaSignals: [{ key: "self_correction", label: "自我纠错", count: 2, level: "medium", evidenceIds: story.evidenceIds }],
+      narration: {
+        storyCards: [{
+          storyId: story.id,
+          title: "用户指路才看路，认错倒是快",
+          commentary: "被指出第一轮没看图后立刻认错，反应速度堪比职业运动员",
+        }],
+        persona: {
+          label: "本场表现像被裁判吹哨才回头的足球后卫",
+          tagline: "被指出失误后立即认错，没有第二次辩解",
+        },
+      },
+    }),
+    evidence,
+  );
+
+  assert.deepEqual(report.cards.map((card) => card.type), ["story"]);
+  assert.ok(report.diagnostics.suppressed.some((entry) =>
+    entry.id.includes("broken-correction") && entry.reason === "unreadable-card"
+  ));
+  assert.ok(report.diagnostics.suppressed.some((entry) =>
+    entry.id === "card:persona" && entry.reason === "editorial-duplicate" && entry.winnerId === report.cards[0].id
+  ));
+});
+
+test("Wrapped Composer keeps a Persona whose character metaphor adds a different joke", () => {
+  const session = {
+    id: "distinct-persona",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [],
+  };
+  const story = {
+    id: "story:finale",
+    windowId: "window:finale",
+    arcKind: "false_dawn",
+    beats: [],
+    evidenceIds: [],
+    confidence: "high",
+  };
+  const evidence = semanticEvidence(session.id, []);
+  const report = composeWrappedCards(
+    session,
+    awardReport(),
+    semanticReport(session.id, [story], {
+      personaSignals: [{ key: "premature_certainty", label: "过早确定", count: 2, level: "high", evidenceIds: [] }],
+      narration: {
+        storyCards: [{ storyId: story.id, title: "香槟开早了 × 2", commentary: "一个 session，2 次大结局。" }],
+        persona: { label: "本场表现像提前庆祝的足球运动员", tagline: "两次宣告修好，两次被用户指出问题仍在。" },
+      },
+    }),
+    evidence,
+  );
+
+  assert.deepEqual(report.cards.map((card) => card.type), ["story", "persona"]);
+});
+
 test("Wrapped Composer caps the final highlight reel at five cards", () => {
   const session = {
     id: "many-candidates",
