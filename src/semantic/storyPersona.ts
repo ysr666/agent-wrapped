@@ -43,7 +43,7 @@ function optionalBoundedText(value: unknown, path: string, maxChars: number): st
 }
 
 function hiddenStateClaim(text: string): boolean {
-  return /(?:心里|内心|暗自|故意|偷偷|动机|甩锅|假装|明知|(?:才|终于|突然)?想起|(?:才|终于|突然)?意识到|in (?:its|his|her) (?:head|mind)|inner thought|secretly|intentionally|wanted to|pretend|blame)/iu.test(text);
+  return /(?:心里|内心|暗自|故意|偷偷|动机|甩锅|假装|明知|(?:才|终于|突然)?想起|(?:才|终于|突然)?意识到|(?:才|终于|突然)发现|in (?:its|his|her) (?:head|mind)|inner thought|secretly|intentionally|wanted to|pretend|blame)/iu.test(text);
 }
 
 function unsupportedUserCausality(text: string): boolean {

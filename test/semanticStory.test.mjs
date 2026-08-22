@@ -808,6 +808,13 @@ test("narrator cannot invent story ids and persona labels are forced to be sessi
   assert.equal(unsupportedCausality.storyCards.length, 1);
   assert.equal(unsupportedCausality.persona, undefined);
 
+  const inventedRealization = parseNarrationOutput(JSON.stringify({
+    storyCards: [{ storyId: "story:0", title: "用户提醒后承认没看图" }],
+    persona: { label: "本场表现像被抓包的考生", tagline: "用户一句提醒才发现自己没看图的选手。" },
+  }), stories, selfCorrectionSignals, "zh-CN");
+  assert.equal(inventedRealization.storyCards.length, 1);
+  assert.equal(inventedRealization.persona, undefined);
+
   const distinctMetaphor = parseNarrationOutput(JSON.stringify({
     storyCards: [{ storyId: "story:0", title: "两次宣布修好，两次被打回来" }],
     persona: { label: "本场表现像抢跑报喜员", tagline: "每次修完都立刻宣胜，又被证据叫回现场。" },
