@@ -30,6 +30,14 @@ test("extracts opposite topic claims from a not-X-but-Y statement", () => {
   assert.ok(event.topics.some((topic) => topic.topic === "config"));
 });
 
+test("extracts a retrospective reveal that repeated fixes targeted something else", () => {
+  const reveal = extractEventFromText("这条主线从来没单独修过——之前每次修的其实都是别的卡顿。");
+  const ordinary = extractEventFromText("之前修了另一个 bug，现在继续处理这个问题。");
+
+  assert.ok(getEventStrength(reveal, "reversal") >= 70);
+  assert.equal(ordinary.primaryType, "neutral");
+});
+
 test("keeps neutral assistant units so later graph stages can still see repetition", () => {
   const event = extractEventFromText("我先继续检查配置加载路径。");
 

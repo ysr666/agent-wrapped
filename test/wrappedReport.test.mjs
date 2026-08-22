@@ -83,6 +83,24 @@ test("P4 leaves ordinary technical progress off the highlight reel", () => {
   assert.equal(report.awards.length, 0);
 });
 
+test("P4 keeps repeated wrong-target fixes as one self-contained plot twist", () => {
+  const source = "反馈文档已经核实完，先说结论：**这条主线从来没有被单独修过——之前每次修的其实都是\"别的卡顿\"**。";
+  const report = createWrappedReport([
+    dsh("我先检查历史提交。"),
+    dsh(source),
+    dsh("接下来继续核对代码。"),
+  ], { includeRankedMoments: true });
+
+  assert.equal(report.awards.length, 1);
+  assert.equal(report.awards[0].kind, "plot-twist");
+  assert.equal(report.awards[0].sourceType, "plot_twist");
+  assert.equal(report.awards[0].primaryText, source);
+  assert.equal(report.rankedMoments.filter((moment) => moment.type === "correction_arc").length, 0);
+  const rendered = renderWrappedText(report);
+  assert.match(rendered, /“这条主线从来没有被单独修过——之前每次修的其实都是"别的卡顿"”/u);
+  assert.doesNotMatch(rendered, /反馈文档已经核实完|\*\*/u);
+});
+
 test("P4 supports English presentation without changing original transcript text", () => {
   const report = createWrappedReport(
     [

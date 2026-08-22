@@ -7,6 +7,28 @@ interface SignalRule {
   patterns: Array<{ cue: string; regex: RegExp }>;
 }
 
+const WRONG_TARGET_REPETITION_PATTERNS = [
+  /(?:之前|以前|前面).{0,24}(?:每次|一直|反复).{0,24}(?:修|改|处理).{0,20}(?:其实)?(?:都是|全是|只是在)[“"'‘’]*?(?:别的|另一个|不同的)(?:问题|bug|卡顿|地方|对象|东西)?[”"'’]?/u,
+  /(?:every|all).{0,20}(?:previous|earlier).{0,20}(?:fix|attempt).{0,24}(?:different|other|wrong).{0,16}(?:issue|bug|problem|target)/iu,
+];
+
+/** A retrospective reveal that repeated fixes kept targeting the wrong thing. */
+export function wrongTargetRepetitionCue(text: string): boolean {
+  return WRONG_TARGET_REPETITION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/** Exact source excerpt that keeps the retrospective reversal, not its worklog preamble. */
+export function wrongTargetRepetitionExcerpt(text: string): string | undefined {
+  for (const pattern of WRONG_TARGET_REPETITION_PATTERNS) {
+    const match = pattern.exec(text);
+    if (!match || match.index === undefined) continue;
+    const prefix = text.slice(Math.max(0, match.index - 56), match.index);
+    const context = prefix.match(/(?:(?:这条|这个|该).{0,18}(?:从来|一直).{0,12}(?:没|没有).{0,16}(?:修|改|处理)(?:过)?[—\-，,:： ]*)$/u)?.[0] ?? "";
+    return `${context}${match[0]}`.trim();
+  }
+  return undefined;
+}
+
 const SIGNAL_RULES: SignalRule[] = [
   {
     type: "discovery_claim",
@@ -80,6 +102,8 @@ const SIGNAL_RULES: SignalRule[] = [
       },
       { cue: "approach-wrong", regex: /(?:路线|方向|思路|假设|判断|结论|方案).{0,28}(?:完全)?(?:错(?:了|的)?|不对|反了|走偏了)/u },
       { cue: "not-but", regex: /(?:不是|并非).{0,40}(?:而是|其实是|真正是|才是)/u },
+      { cue: "repeated-fixes-wrong-target", regex: WRONG_TARGET_REPETITION_PATTERNS[0] },
+      { cue: "english-repeated-fixes-wrong-target", regex: WRONG_TARGET_REPETITION_PATTERNS[1] },
       { cue: "english-wrong", regex: /\b(?:i|we)\s+(?:was|were)\s+wrong\b/iu },
       { cue: "english-approach-wrong", regex: /\b(?:our|the)\s+(?:approach|assumption|direction|theory|path).{0,32}\bwrong\b/iu },
       { cue: "english-reset", regex: /\b(?:wait[,—\s-]*(?:no|that's wrong|i was wrong)|start over|retract(?:ing)?)\b/iu },

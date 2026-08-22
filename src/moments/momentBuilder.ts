@@ -1,4 +1,5 @@
 import { getEventStrength } from "../events/eventExtractor.js";
+import { wrongTargetRepetitionCue } from "../events/lexicon.js";
 import type { Event } from "../events/types.js";
 import { clusterRepetitionEvents } from "../graph/repetition.js";
 import type { MomentGraph, MomentRelation } from "../graph/types.js";
@@ -142,6 +143,7 @@ function makeFalseDawns(graph: MomentGraph, byId: Map<string, Event>): Moment[] 
 function ownsChangedMind(event: Event, minStrength: number): boolean {
   if (getEventStrength(event, "correction") >= minStrength) return true;
   return (
+    wrongTargetRepetitionCue(event.text) ||
     /(?:我|我们|\bi\b|\bwe\b).{0,36}(?:错(?:了|的)?|不对|搞反了|走偏了|wrong|mistake|take that back)/iu.test(event.text) ||
     /^(?:等等|等一下|先等等|wait|hold on).{0,36}(?:不对|错了|反了|no|wrong)/iu.test(event.text)
   );
@@ -239,6 +241,9 @@ function makeCorrectionArcs(graph: MomentGraph, windowMessages: number): Moment[
     );
     if (correctionStrength < 65) continue;
     if (!ownsChangedMind(pivot, 65)) continue;
+    // This retrospective reveal is already complete in one sentence. Nearby
+    // technical claims are context, not invented acts in a three-part story.
+    if (wrongTargetRepetitionCue(pivot.text)) continue;
 
     let before: Event | undefined;
     for (let index = pivotIndex - 1; index >= 0; index -= 1) {

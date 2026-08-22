@@ -1,4 +1,5 @@
 import type { Award } from "../awards/types.js";
+import { wrongTargetRepetitionExcerpt } from "../events/lexicon.js";
 import { localizeAgentPhrase } from "../presentation/localization.js";
 import { presentRepeatedPattern } from "../presentation/repeatedPattern.js";
 import type { WrappedRenderOptions, WrappedReport } from "./types.js";
@@ -11,14 +12,16 @@ function quoteMarkdown(text: string): string {
 }
 
 function localizedQuoteMarkdown(text: string, locale: WrappedReport["locale"]): string {
-  const quoted = quoteMarkdown(text);
-  const hint = localizeAgentPhrase(text, locale);
+  const displayText = wrongTargetRepetitionExcerpt(text) ?? text;
+  const quoted = quoteMarkdown(displayText);
+  const hint = localizeAgentPhrase(displayText, locale);
   return hint ? `${quoted}\n> _中文提示：${hint}_` : quoted;
 }
 
 function localizedPlainQuote(text: string, locale: WrappedReport["locale"]): string {
-  const hint = localizeAgentPhrase(text, locale);
-  return hint ? `“${text}”\n  ↳ 中文提示：${hint}` : `“${text}”`;
+  const displayText = wrongTargetRepetitionExcerpt(text) ?? text;
+  const hint = localizeAgentPhrase(displayText, locale);
+  return hint ? `“${displayText}”\n  ↳ 中文提示：${hint}` : `“${displayText}”`;
 }
 
 function chronologicalTexts(award: Award): string[] {

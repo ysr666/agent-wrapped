@@ -1,4 +1,5 @@
 import type { RankedMoment } from "../moments/types.js";
+import { wrongTargetRepetitionCue } from "../events/lexicon.js";
 import type {
   Award,
   AwardComposerOptions,
@@ -221,6 +222,7 @@ function isShareableCorrection(moment: RankedMoment): boolean {
   if (moment.type !== "plot_twist" && moment.type !== "correction_arc") return true;
   const text = moment.primaryText.trim();
   return /(?:等等|等一下|先等等|wait|hold on).{0,36}(?:不对|错|反|wrong|no)/iu.test(text) ||
+    wrongTargetRepetitionCue(text) ||
     /(?:我|我们|i|we).{0,32}(?:判断|诊断|路线|方向|思路|方案|看|做|搞|改|assumption|diagnosis|approach|direction|plan).{0,16}(?:错|反|偏|有误|wrong|mistake)/iu.test(text) ||
     /(?:第一轮|上一轮|每次|总是|一直).{0,36}(?:没|没有|失误|坏习惯|错)|(?:没有任何借口|no excuse|bad habit)/iu.test(text);
 }
