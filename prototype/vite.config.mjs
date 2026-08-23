@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { realWrappedDevApi } from "./server/real-wrapped.mjs";
 
 export default defineConfig({
   build: {
@@ -15,5 +16,5 @@ export default defineConfig({
       clientFiles: ["./src/main.jsx"],
     },
   },
-  plugins: [react()],
+  plugins: [realWrappedDevApi(), react()],
 });

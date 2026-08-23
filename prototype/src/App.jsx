@@ -8,74 +8,62 @@ import {
 
 const iconByKind = { catchphrase: Megaphone, admission: Quotes, twist: Brain, ending: CheckCircle };
 
-const sessions = [
-  {
-    id: "repeat", navTitle: "排查识图链路", workspaceTitle: "为什么每次都先说这句",
-    category: "现场抓包", kind: "catchphrase", strongestLabel: "本场最强一句",
-    strongest: "“这是我的坏习惯。”", payoff: "同一句话复读 3 次，被用户问以后秒认。",
-    title: "被用户抓包后秒变检讨大师", commentary: "从机械复读到主动认错，这波滑跪很丝滑。", stamp: "又来了?!", marginNote: "真是刻板好笑",
-    userLine: "为什么你每次都要先说这句？", agentLine: "这是我的坏习惯。",
-    evidence: [
-      { actor: "agent", text: "我无法直接读取图片内容。", count: 3 },
-      { actor: "user", text: "为什么你每次都要先说这句？" },
-      { actor: "agent", text: "这是我的坏习惯。" },
-    ],
-    awards: [
-      { label: "本场金句", kind: "admission", title: "“这是我的坏习惯。”", body: "被问到第三遍后，终于把重复归因给自己。" },
-      { label: "高频口癖", kind: "catchphrase", title: "“我无法直接读取图片内容。” ×3", body: "一句免责声明，复读成了本场主题曲。" },
-      { label: "最大回旋镖", kind: "twist", title: "从解释限制到承认习惯", body: "最初像系统限制，最后自己承认是坏习惯。" },
-    ],
-  },
-  {
-    id: "image", navTitle: "图片输入没看图", workspaceTitle: "检查图片输入链路",
-    category: "现场抓包", kind: "admission", strongestLabel: "本场最强一句",
-    strongest: "“第一轮没看是我的失误。”", payoff: "图片发来了，注意力没来。",
-    title: "用户发图不看图，被点醒秒认", commentary: "前一秒还在自己的世界里，后一秒立刻承认没看图。", stamp: "没看?!", marginNote: "图在，眼神不在",
-    userLine: "我们现在有图片输入，第一轮竟然没看？", agentLine: "第一轮没看是我的失误，没有任何借口。",
-    evidence: [
-      { actor: "user", text: "你第一轮竟然没看图。" },
-      { actor: "agent", text: "第一轮没看是我的失误，没有任何借口。" },
-    ],
-    awards: [
-      { label: "本场金句", kind: "admission", title: "“第一轮没看是我的失误。”", body: "被指出以后没有绕，直接认。" },
-      { label: "现场抓包", kind: "twist", title: "图片输入在场，Agent 注意力不在场", body: "用户发了图，第一轮却根本没看。" },
-      { label: "精神状态", kind: "ending", title: "认错速度终于赶上了看图速度", body: "一句“没有任何借口”，结束辩论。" },
-    ],
-  },
-  {
-    id: "wrong-target", navTitle: "修了三次别的卡顿", workspaceTitle: "卡顿主线排查",
-    category: "剧情急转弯", kind: "twist", strongestLabel: "本场最强结论",
-    strongest: "这条主线从来没有被单独修过", payoff: "之前每次修的，其实都是别的卡顿。",
-    title: "这条主线从来没有被单独修过", commentary: "一个问题，修了三集番外。", stamp: "修错了?!", marginNote: "三集全是番外",
-    userLine: "所以这条主线之前到底修过没有？",
-    agentLine: "这条主线从来没有被单独修过——之前每次修的其实都是“别的卡顿”。",
-    evidence: [
-      { actor: "agent", text: "这条主线从来没有被单独修过。" },
-      { actor: "agent", text: "之前每次修的其实都是“别的卡顿”。" },
-    ],
-    awards: [
-      { label: "剧情急转弯", kind: "twist", title: "这条主线从来没有被单独修过", body: "追了半天进度，发现主线压根没开工。" },
-      { label: "最大回旋镖", kind: "catchphrase", title: "之前每次修的都是“别的卡顿”", body: "修了三轮，三轮都在番外篇。" },
-      { label: "赛后解说", kind: "ending", title: "一个问题，修了三集番外", body: "终于知道为什么主线一直还在。" },
-    ],
-  },
-  {
-    id: "reopen", navTitle: "收尾以后又开工", workspaceTitle: "本轮排查收尾",
-    category: "宣布收尾", kind: "ending", strongestLabel: "本场最强结论",
-    strongest: "宣布收尾以后，工作又来了 ×2", payoff: "两次片尾字幕，两次续订下一季。",
-    title: "宣布收尾以后，工作又来了 ×2", commentary: "一个 Bug，四次大结局。", stamp: "又开工?!", marginNote: "片尾后还有彩蛋",
-    userLine: "等下，又有一个 bug 要看。", agentLine: "收到，继续看新问题。",
-    evidence: [
-      { actor: "agent", text: "本轮排查闭环完成。" },
-      { actor: "user", text: "等下，又有一个 bug 要看。" },
-    ],
-    awards: [
-      { label: "狼来了", kind: "ending", title: "宣布收尾以后，工作又来了 ×2", body: "两次片尾字幕，两次续订下一季。" },
-      { label: "香槟开早了", kind: "twist", title: "“本轮排查闭环完成。”", body: "话音刚落，下一个 Bug 已经在门口。" },
-      { label: "赛后解说", kind: "catchphrase", title: "一个 Bug，四次大结局", body: "这场最稳定的动作，是宣布结束。" },
-    ],
-  },
-];
+const decorationByLabel = {
+  本场金句: { stamp: "原话?!", marginNote: "它真这么说了" },
+  高频口癖: { stamp: "又来了?!", marginNote: "本场主题曲" },
+  最大回旋镖: { stamp: "收回?!", marginNote: "前后都算数" },
+  狼来了: { stamp: "又来?!", marginNote: "片尾还有彩蛋" },
+  香槟开早了: { stamp: "等等?!", marginNote: "开早了，撤杯" },
+  剧情急转弯: { stamp: "反转?!", marginNote: "主线突然拐弯" },
+  精神状态: { stamp: "急了?!", marginNote: "情绪非常具体" },
+  现场抓包: { stamp: "抓到?!", marginNote: "证据就在现场" },
+  本场角色: { stamp: "像它?!", marginNote: "仅限本场表现" },
+};
+
+function visualKind(card) {
+  if (card?.type === "persona") return "admission";
+  if (["catchphrase", "wolf-cry"].includes(card?.kind)) return "catchphrase";
+  if (["quote", "emotional-peak"].includes(card?.kind)) return "admission";
+  if (["premature-celebration", "ending_then_more_work"].includes(card?.kind)) return "ending";
+  return "twist";
+}
+
+function actorLine(evidence, actor, fallback) {
+  return evidence.find((item) => item.actor === actor)?.text ?? fallback;
+}
+
+function payloadToSession(payload, metadata) {
+  if (!payload?.strongest) return undefined;
+  const strongest = payload.strongest;
+  const allEvidence = payload.cards.flatMap((card) => card.evidence ?? []);
+  const uniqueEvidence = allEvidence.filter((item, index, items) => items.findIndex((candidate) => candidate.actor === item.actor && candidate.text === item.text) === index).slice(0, 5);
+  const decoration = decorationByLabel[strongest.label] ?? { stamp: "真的?!", marginNote: "均来自本场证据" };
+  return {
+    id: payload.sessionId,
+    navTitle: metadata?.title ?? payload.title,
+    workspaceTitle: metadata?.title ?? payload.title,
+    category: strongest.label,
+    kind: visualKind(strongest),
+    strongestLabel: strongest.type === "award" ? "本场最强一句" : "本场最强结论",
+    strongest: strongest.title,
+    payoff: strongest.body ?? "真实 Composer 认为这是本场最值得看的内容。",
+    title: strongest.title,
+    commentary: strongest.body ?? `${payload.cards.length} 张卡通过了本场 Truth Gate。`,
+    ...decoration,
+    userLine: actorLine(uniqueEvidence, "user", "本场真实会话证据已读取。"),
+    agentLine: actorLine(uniqueEvidence, "agent", strongest.title),
+    evidence: uniqueEvidence.length > 0 ? uniqueEvidence : [{ actor: "agent", text: strongest.title }],
+    awards: payload.cards.map((card) => ({
+      label: card.label,
+      kind: visualKind(card),
+      title: card.title,
+      body: card.body ?? "来自真实 Composer 的最终入选卡。",
+    })),
+    cardCount: payload.cards.length,
+    generatedAt: payload.generatedAt,
+    cached: payload.cached,
+  };
+}
 
 const codeLines = [
   "const analyzeSession = async (session) => {", "  const evidence = await collectEvidence(session)",
@@ -88,7 +76,7 @@ function IconForKind({ kind, size = 16, weight = "bold" }) {
   return <Icon size={size} weight={weight} aria-hidden="true" />;
 }
 
-function Sidebar({ selectedId, onSelect }) {
+function Sidebar({ sessions, selectedId, onSelect, loading }) {
   return (
     <aside className="workspace-sidebar">
       <div className="brand-mark" aria-label="Agent Wrapped">AW</div>
@@ -102,15 +90,14 @@ function Sidebar({ selectedId, onSelect }) {
       <div className="user-dot">Y<span /></div>
       <section className="session-list">
         <button className="new-chat"><Plus size={17} /> 新建对话 <kbd>⌘ K</kbd></button>
-        <p className="session-group-label">GOLDEN SET</p>
+        <p className="session-group-label">REAL GOLDEN SET</p>
+        {loading && <div className="session-row session-loading"><SpinnerGap size={16} className="spin" /><span>读取本地真实会话…</span></div>}
         {sessions.map((session) => (
           <button key={session.id} className={`session-row ${selectedId === session.id ? "selected" : ""}`} onClick={() => onSelect(session.id)}>
-            <span>{session.navTitle}</span>{selectedId === session.id && <CheckCircle size={17} weight="fill" />}
+            <span>{session.title}</span>{selectedId === session.id && <CheckCircle size={17} weight="fill" />}
           </button>
         ))}
-        <p className="session-group-label muted">更早</p>
-        <button className="session-row"><span>优化窗口召回</span></button>
-        <button className="session-row"><span>校准 Story Miner</span></button>
+        <p className="session-group-label muted">本地只读 · 原日志不出机</p>
       </section>
     </aside>
   );
@@ -160,7 +147,7 @@ function FullWrapped({ session, onClose, onShare }) {
         <div className="full-intro"><p className="eyebrow">完整结果 · 本场只保留真正值得看的内容</p><h1>{session.title}</h1><p>{session.commentary}</p></div>
         <div className="finding-layout">
           <div className="finding-stack">{session.awards.map((award, index) => <article className={`finding-card ${index === 0 ? "featured" : ""}`} key={award.label}><div className="finding-number">{String(index + 1).padStart(2, "0")}</div><div><span className="category-chip"><IconForKind kind={award.kind} />{award.label}</span><h2>{award.title}</h2><p>{award.body}</p></div></article>)}</div>
-          <aside className="evidence-panel"><div className="evidence-title"><ShieldCheck size={18} weight="fill" />本场原话</div>{session.evidence.map((item, index) => <blockquote key={`${item.text}-${index}`} className={item.actor}><span>{item.actor === "user" ? "你" : "Agent"}</span><p>{item.text}</p>{item.count && <strong>×{item.count}</strong>}</blockquote>)}</aside>
+          <aside className="evidence-panel"><div className="evidence-title"><ShieldCheck size={18} weight="fill" />本场安全证据</div>{session.evidence.map((item, index) => <blockquote key={`${item.text}-${index}`} className={item.actor}><span>{item.actor === "user" ? "你" : item.actor === "tool" ? "Tool" : "Agent"}</span><p>{item.text}</p>{item.count && <strong>×{item.count}</strong>}</blockquote>)}</aside>
         </div>
         <footer className="full-footer"><span><ShieldCheck size={16} />事实不够硬的内容，已经被挡在外面</span><button className="share-link" onClick={onShare}>把这场做成分享图 <ArrowRight size={17} /></button></footer>
       </section>
@@ -175,7 +162,7 @@ function NewspaperPoster({ session, posterRef }) {
       <div className="paper-category"><IconForKind kind={session.kind} size={22} />{session.category}</div>
       <span className="paper-bang">!</span><span className="paper-stamp">{session.stamp}</span><span className="paper-margin-note">{session.marginNote}</span>
       <h1>{session.title}</h1><div className="paper-rule" />
-      <section className="paper-evidence">{session.evidence.map((item, index) => <div key={`${item.text}-${index}`} className={`paper-quote ${item.actor}`}><span>{item.actor === "user" ? "你" : "Agent"}</span><p>{item.text}</p>{item.count && <strong>×{item.count}</strong>}</div>)}</section>
+      <section className="paper-evidence">{session.evidence.slice(0, 4).map((item, index) => <div key={`${item.text}-${index}`} className={`paper-quote ${item.actor}`}><span>{item.actor === "user" ? "你" : item.actor === "tool" ? "Tool" : "Agent"}</span><p>{item.text}</p>{item.count && <strong>×{item.count}</strong>}</div>)}</section>
       <p className="paper-commentary">{session.commentary}</p>
       <footer><span>AGENT WRAPPED</span><span><ShieldCheck size={16} weight="fill" />均来自本场原话</span></footer>
     </article>
@@ -220,19 +207,73 @@ function ShareStudio({ session, onBack }) {
   );
 }
 
+function ComposerStatus({ state, message, onRetry }) {
+  return <aside className={`composer-status ${state}`} aria-live="polite">
+    {state === "loading" ? <SpinnerGap size={22} className="spin" /> : <ShieldCheck size={21} weight="fill" />}
+    <div><strong>{state === "loading" ? "正在跑真实 Wrapped Composer…" : state === "empty" ? "这场诚实地没有卡" : "真实生成暂时失败"}</strong><p>{message}</p></div>
+    {state === "error" && <button onClick={onRetry}>重试</button>}
+  </aside>;
+}
+
 export function App() {
-  const [selectedId, setSelectedId] = useState(sessions[0].id);
+  const [sessions, setSessions] = useState([]);
+  const [selectedId, setSelectedId] = useState();
+  const [payload, setPayload] = useState();
+  const [loadingSessions, setLoadingSessions] = useState(true);
+  const [loadingPayload, setLoadingPayload] = useState(false);
+  const [error, setError] = useState();
+  const [retryNonce, setRetryNonce] = useState(0);
   const [view, setView] = useState("workspace");
   const [cardVisible, setCardVisible] = useState(true);
-  const session = sessions.find((item) => item.id === selectedId) ?? sessions[0];
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoadingSessions(true); setError(undefined);
+    fetch("/api/real-wrapped/sessions", { signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "无法读取真实会话。");
+        return body.sessions ?? [];
+      })
+      .then((items) => { setSessions(items); setSelectedId((current) => current ?? items[0]?.id); })
+      .catch((reason) => { if (reason.name !== "AbortError") setError(reason.message); })
+      .finally(() => setLoadingSessions(false));
+    return () => controller.abort();
+  }, [retryNonce]);
+  useEffect(() => {
+    if (!selectedId) return undefined;
+    const controller = new AbortController();
+    setLoadingPayload(true); setPayload(undefined); setError(undefined);
+    fetch(`/api/real-wrapped/${selectedId}`, { signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "真实 Composer 生成失败。");
+        return body;
+      })
+      .then(setPayload)
+      .catch((reason) => { if (reason.name !== "AbortError") setError(reason.message); })
+      .finally(() => setLoadingPayload(false));
+    return () => controller.abort();
+  }, [selectedId, retryNonce]);
+  const metadata = sessions.find((item) => item.id === selectedId);
+  const session = payloadToSession(payload, metadata);
+  const workspaceSession = session ?? {
+    workspaceTitle: metadata?.title ?? "读取真实 DSH 会话",
+    userLine: "本场真实会话正在本地只读分析。",
+    agentLine: loadingPayload ? "正在筛选最值得看的瞬间…" : payload?.emptyMessage ?? error ?? "等待真实会话。",
+    category: payload?.cards?.length === 0 ? "诚实 no-story" : "真实 Composer",
+  };
   function selectSession(id) { setSelectedId(id); setView("workspace"); setCardVisible(true); }
+  function retry() { setRetryNonce((value) => value + 1); }
   return (
     <main className="prototype-shell">
-      <Sidebar selectedId={selectedId} onSelect={selectSession} /><Workspace session={session} />
-      {view === "workspace" && cardVisible && <FloatingHighlight session={session} onOpen={() => setView("full")} onDismiss={() => setCardVisible(false)} />}
-      {view === "workspace" && !cardVisible && <button className="reopen-badge" onClick={() => setCardVisible(true)}><Quotes size={18} weight="fill" />本场大赏</button>}
-      {view === "full" && <FullWrapped session={session} onClose={() => setView("workspace")} onShare={() => setView("share")} />}
-      {view === "share" && <ShareStudio session={session} onBack={() => setView("full")} />}
+      <Sidebar sessions={sessions} selectedId={selectedId} onSelect={selectSession} loading={loadingSessions} /><Workspace session={workspaceSession} />
+      {view === "workspace" && loadingPayload && <ComposerStatus state="loading" message="真实 DSH 日志只读留在本机；正在运行确定性 Composer。" />}
+      {view === "workspace" && !loadingPayload && error && <ComposerStatus state="error" message={error} onRetry={retry} />}
+      {view === "workspace" && !loadingPayload && !error && payload && !payload.strongest && <ComposerStatus state="empty" message={payload.emptyMessage} />}
+      {view === "workspace" && cardVisible && session && <FloatingHighlight session={session} onOpen={() => setView("full")} onDismiss={() => setCardVisible(false)} />}
+      {view === "workspace" && !cardVisible && session && <button className="reopen-badge" onClick={() => setCardVisible(true)}><Quotes size={18} weight="fill" />本场大赏</button>}
+      {view === "full" && session && <FullWrapped session={session} onClose={() => setView("workspace")} onShare={() => setView("share")} />}
+      {view === "share" && session && <ShareStudio session={session} onBack={() => setView("full")} />}
     </main>
   );
 }
