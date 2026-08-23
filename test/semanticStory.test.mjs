@@ -287,14 +287,17 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.ok(signals.every((signal) => !("score" in signal)));
 
   const narration = buildNarrationPrompt(evidence, validation.stories, signals);
-  assert.match(narration.system, /只负责/u);
+  assert.match(narration.system, /娱乐编辑/u);
+  assert.match(narration.system, /像真人.*不是笑点/u);
+  assert.match(narration.system, /普通认错/u);
   assert.match(narration.system, /禁止输出 0-100/u);
   assert.match(narration.system, /赛后大赏，不是审核报告/u);
   assert.match(narration.system, /区别于 story title\/commentary/u);
   assert.match(narration.system, /用户不催就不干活/u);
   assert.match(narration.system, /时间顺序上的反差/u);
   assert.doesNotMatch(narration.user, /一个 Bug，三次大结局|收工很积极的侦探/u);
-  assert.match(narration.user, /"storyId": "story:0"/u);
+  assert.match(narration.user, /"id": "story:0"/u);
+  assert.match(narration.user, /"storyCards": \[\]/u);
   assert.doesNotMatch(narration.user, /"id": "event:e0"|"id": "event:e1"/u);
 });
 

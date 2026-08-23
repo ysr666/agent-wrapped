@@ -22,6 +22,10 @@ import type {
   WrappedComposerOptions,
   ComposedWrappedNarrator,
 } from "./types.js";
+import {
+  evaluateAwardEntertainment,
+  evaluateStoryEntertainment,
+} from "./entertainmentGate.js";
 
 interface Candidate {
   card: ComposedWrappedCard;
@@ -245,7 +249,10 @@ function personaCandidate(report: SemanticStoryPersonaReport): Candidate | undef
   const persona = report.narration?.persona;
   if (!persona) return undefined;
   const strongestCount = Math.max(0, ...report.personaSignals.map((signal) => signal.count));
-  const hasStrongSignal = report.personaSignals.some((signal) => signal.level === "medium" || signal.level === "high");
+  const entertainingSignals = new Set(["dramaticity", "improvisation", "premature_certainty", "repetition"]);
+  const hasStrongSignal = report.personaSignals.some((signal) =>
+    entertainingSignals.has(signal.key) && (signal.level === "medium" || signal.level === "high")
+  );
   if (!hasStrongSignal && strongestCount < 2) return undefined;
   const card: ComposedPersonaCard = {
     id: "card:persona",
@@ -288,9 +295,20 @@ export function composeWrappedCards(
   const maxStoryCards = clampInt(options.maxStoryCards, 2, 0, 2);
   const currentToOriginal = currentToOriginalMessageIndexes(session);
   const eventById = localEventMap(session);
-  const candidates: Candidate[] = awardReport.awards.map((award) => awardCandidate(award, currentToOriginal));
+  const candidates: Candidate[] = [];
+  const suppressed: ComposedWrappedReport["diagnostics"]["suppressed"] = [];
+  for (const award of awardReport.awards) {
+    const decision = evaluateAwardEntertainment(award);
+    if (decision.show) candidates.push(awardCandidate(award, currentToOriginal));
+    else suppressed.push({ id: `card:award:${award.id}`, reason: decision.reason });
+  }
   const storiesByArc = new Map<StoryArcKind, VerifiedStoryArc[]>();
   for (const story of semanticReport.stories) {
+    const decision = evaluateStoryEntertainment(story, semanticReport, semanticEvidence);
+    if (!decision.show) {
+      suppressed.push({ id: `card:story:${story.arcKind}:${story.id}`, reason: decision.reason });
+      continue;
+    }
     const group = storiesByArc.get(story.arcKind) ?? [];
     group.push(story);
     storiesByArc.set(story.arcKind, group);
@@ -302,9 +320,12 @@ export function composeWrappedCards(
   if (persona) candidates.push(persona);
 
   const selected: Candidate[] = [];
-  const suppressed: ComposedWrappedReport["diagnostics"]["suppressed"] = [];
   let storyCards = 0;
-  for (const candidate of candidates.sort(candidateOrder)) {
+  const orderedCandidates = [
+    ...candidates.filter((candidate) => candidate.card.type !== "persona").sort(candidateOrder),
+    ...candidates.filter((candidate) => candidate.card.type === "persona").sort(candidateOrder),
+  ];
+  for (const candidate of orderedCandidates) {
     if (unreadableAwardCandidate(candidate)) {
       suppressed.push({ id: candidate.card.id, reason: "unreadable-card" });
       continue;
@@ -324,6 +345,10 @@ export function composeWrappedCards(
       continue;
     }
     if (candidate.card.type === "persona") {
+      if (!selected.some((winner) => winner.card.type !== "persona")) {
+        suppressed.push({ id: candidate.card.id, reason: "no-laugh-carrier" });
+        continue;
+      }
       const duplicate = personaRepeatsSelectedEditorial(candidate, selected);
       if (duplicate) {
         suppressed.push({ id: candidate.card.id, reason: "editorial-duplicate", winnerId: duplicate.card.id });

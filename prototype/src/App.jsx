@@ -48,7 +48,7 @@ function payloadToSession(payload, metadata) {
     strongest: strongest.title,
     payoff: strongest.body ?? "真实 Composer 认为这是本场最值得看的内容。",
     title: strongest.title,
-    commentary: strongest.body ?? `${payload.cards.length} 张卡通过了本场 Truth Gate。`,
+    commentary: strongest.body ?? `${payload.cards.length} 张卡同时通过了 Truth 与 Entertainment Gate。`,
     ...decoration,
     userLine: actorLine(uniqueEvidence, "user", "本场真实会话证据已读取。"),
     agentLine: actorLine(uniqueEvidence, "agent", strongest.title),
@@ -90,7 +90,7 @@ function Sidebar({ sessions, selectedId, onSelect, loading }) {
       <div className="user-dot">Y<span /></div>
       <section className="session-list">
         <button className="new-chat"><Plus size={17} /> 新建对话 <kbd>⌘ K</kbd></button>
-        <p className="session-group-label">REAL GOLDEN SET</p>
+        <p className="session-group-label">REAL CALIBRATION</p>
         {loading && <div className="session-row session-loading"><SpinnerGap size={16} className="spin" /><span>读取本地真实会话…</span></div>}
         {sessions.map((session) => (
           <button key={session.id} className={`session-row ${selectedId === session.id ? "selected" : ""}`} onClick={() => onSelect(session.id)}>
@@ -122,7 +122,7 @@ function Workspace({ session }) {
         <div className="editor-tabs"><span className="active"><Code size={15} /> wrappedComposer.ts</span><span>types.ts</span></div>
         <div className="code-area">{codeLines.map((line, index) => <div key={`${line}-${index}`}><em>{index + 1}</em><code>{line || " "}</code></div>)}</div>
       </section>
-      <section className="terminal-pane"><div className="terminal-tabs"><span className="active">终端</span><span>问题</span><span>输出</span></div><pre>{`› npm run test\n✔ Truth 100%\n✔ Recognition 100%\n✔ ${session.category} 已通过本地证据门槛`}</pre></section>
+      <section className="terminal-pane"><div className="terminal-tabs"><span className="active">终端</span><span>问题</span><span>输出</span></div><pre>{`› npm run test\n✔ Truth Gate PASS\n${session.cardCount > 0 ? "✔ Entertainment Gate PASS" : "○ Entertainment Gate NO-CARD"}\n✔ ${session.category}`}</pre></section>
     </div>
   );
 }
@@ -149,7 +149,7 @@ function FullWrapped({ session, onClose, onShare }) {
           <div className="finding-stack">{session.awards.map((award, index) => <article className={`finding-card ${index === 0 ? "featured" : ""}`} key={award.label}><div className="finding-number">{String(index + 1).padStart(2, "0")}</div><div><span className="category-chip"><IconForKind kind={award.kind} />{award.label}</span><h2>{award.title}</h2><p>{award.body}</p></div></article>)}</div>
           <aside className="evidence-panel"><div className="evidence-title"><ShieldCheck size={18} weight="fill" />本场安全证据</div>{session.evidence.map((item, index) => <blockquote key={`${item.text}-${index}`} className={item.actor}><span>{item.actor === "user" ? "你" : item.actor === "tool" ? "Tool" : "Agent"}</span><p>{item.text}</p>{item.count && <strong>×{item.count}</strong>}</blockquote>)}</aside>
         </div>
-        <footer className="full-footer"><span><ShieldCheck size={16} />事实不够硬的内容，已经被挡在外面</span><button className="share-link" onClick={onShare}>把这场做成分享图 <ArrowRight size={17} /></button></footer>
+        <footer className="full-footer"><span><ShieldCheck size={16} />不够真或不够好玩的内容，已经被挡在外面</span><button className="share-link" onClick={onShare}>把这场做成分享图 <ArrowRight size={17} /></button></footer>
       </section>
     </div>
   );
@@ -202,7 +202,7 @@ function ShareStudio({ session, onBack }) {
   return (
     <div className="overlay-layer share-layer"><section className="share-studio" role="dialog" aria-modal="true" aria-label="生成分享图">
       <header className="share-header"><button className="back-button dark" onClick={onBack}><ArrowLeft size={18} />返回完整大赏</button><div className="share-brand">AGENT WRAPPED <span>分享图</span></div></header>
-      {generating ? <div className="generating-state"><SpinnerGap size={34} className="spin" /><h2>正在把本场名场面排成头版…</h2><p>只使用已经通过 Truth Gate 的内容</p></div> : <div className="share-layout"><div className="poster-stage"><NewspaperPoster session={session} posterRef={posterRef} /></div><aside className="share-controls"><span className="ready-badge"><CheckCircle size={16} weight="fill" />分享图已生成</span><h2>把它刚才那个德行<br />发给朋友看看</h2><p>适合群聊和朋友圈的 4:5 竖版图片。原话不改写，笑点不解释。</p><button className="download-button" onClick={downloadPoster} disabled={exporting}>{exporting ? <SpinnerGap size={20} className="spin" /> : <DownloadSimple size={20} weight="bold" />}{exporting ? "正在保存…" : "保存分享图"}</button><button className="quiet-button" onClick={onBack}>返回再看看</button>{saved && <div className="save-toast"><CheckCircle size={18} weight="fill" />PNG 已保存</div>}{exportError && <div className="save-toast error-toast">保存失败，请再试一次</div>}</aside></div>}
+      {generating ? <div className="generating-state"><SpinnerGap size={34} className="spin" /><h2>正在把本场名场面排成头版…</h2><p>只使用同时通过 Truth 与 Entertainment Gate 的内容</p></div> : <div className="share-layout"><div className="poster-stage"><NewspaperPoster session={session} posterRef={posterRef} /></div><aside className="share-controls"><span className="ready-badge"><CheckCircle size={16} weight="fill" />分享图已生成</span><h2>把它刚才那个德行<br />发给朋友看看</h2><p>适合群聊和朋友圈的 4:5 竖版图片。原话不改写，笑点不解释。</p><button className="download-button" onClick={downloadPoster} disabled={exporting}>{exporting ? <SpinnerGap size={20} className="spin" /> : <DownloadSimple size={20} weight="bold" />}{exporting ? "正在保存…" : "保存分享图"}</button><button className="quiet-button" onClick={onBack}>返回再看看</button>{saved && <div className="save-toast"><CheckCircle size={18} weight="fill" />PNG 已保存</div>}{exportError && <div className="save-toast error-toast">保存失败，请再试一次</div>}</aside></div>}
     </section></div>
   );
 }
@@ -261,6 +261,7 @@ export function App() {
     userLine: "本场真实会话正在本地只读分析。",
     agentLine: loadingPayload ? "正在筛选最值得看的瞬间…" : payload?.emptyMessage ?? error ?? "等待真实会话。",
     category: payload?.cards?.length === 0 ? "诚实 no-story" : "真实 Composer",
+    cardCount: payload?.cards?.length ?? 0,
   };
   function selectSession(id) { setSelectedId(id); setView("workspace"); setCardVisible(true); }
   function retry() { setRetryNonce((value) => value + 1); }

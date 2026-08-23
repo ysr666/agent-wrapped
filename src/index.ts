@@ -21,6 +21,7 @@ export * from "./moments/momentRanker.js";
 export * from "./awards/types.js";
 export * from "./awards/awardComposer.js";
 export * from "./composer/types.js";
+export * from "./composer/entertainmentGate.js";
 export * from "./composer/wrappedComposer.js";
 export * from "./composer/renderer.js";
 export * from "./composer/uiPayload.js";

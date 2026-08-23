@@ -9,10 +9,10 @@ const prototypeRoot = resolve(serverRoot, "..");
 const repoRoot = resolve(prototypeRoot, "..");
 const cacheRoot = join(prototypeRoot, ".cache", "real-wrapped");
 
-export const GOLDEN_SESSION_HASHES = [
+export const CALIBRATION_SESSION_HASHES = [
+  "1c03f89d7844",
   "bc63ce9fee84",
   "9005b00acc52",
-  "1c03f89d7844",
   "0edd389dd40e",
 ];
 
@@ -84,7 +84,7 @@ async function loadEngine() {
 }
 
 export function createRealWrappedService(options = {}) {
-  const hashes = options.sessionHashes ?? GOLDEN_SESSION_HASHES;
+  const hashes = options.sessionHashes ?? CALIBRATION_SESSION_HASHES;
   const allowRemote = options.allowRemote ?? /^(?:1|true|yes)$/iu.test(process.env.AGENT_WRAPPED_ALLOW_REMOTE_REAL_SESSIONS?.trim() ?? "");
   const generationCache = new Map();
   let sessionsPromise;
@@ -119,7 +119,7 @@ export function createRealWrappedService(options = {}) {
     if (generationCache.has(hash)) return generationCache.get(hash);
     const promise = (async () => {
       const session = (await sessions()).find((candidate) => publicSessionHash(candidate.id) === hash);
-      if (!session) throw new Error("Requested real session is not in the local golden set.");
+      if (!session) throw new Error("Requested real session is not in the local calibration set.");
       const version = `${await engineCacheVersion()}-${allowRemote ? "remote" : "local"}`;
       const cached = await readCachedPayload(hash, version);
       if (cached) return { ...cached, cached: true };

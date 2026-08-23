@@ -1,4 +1,6 @@
 import { wrongTargetRepetitionExcerpt } from "../events/lexicon.js";
+import { extractEventFromText } from "../events/eventExtractor.js";
+import { scoreQuote } from "../core/quoteScorer.js";
 import { redactSemanticText } from "../semantic/evidence.js";
 import type { SemanticEvidenceEvent } from "../semantic/types.js";
 import type { AwardKind } from "../awards/types.js";
@@ -126,6 +128,34 @@ function quotableAgentExcerpt(text: string): string | undefined {
   return undefined;
 }
 
+function strongestGroundedLine(texts: string[]): string | undefined {
+  const candidates = texts.flatMap((text) => compact(text, 240)
+    .split(/(?<=[。！？!?])|\n+/u)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 4 && part.length <= 120));
+  return candidates
+    .map((text, index) => {
+      const event = extractEventFromText(text);
+      const signal = Math.max(0, ...Object.values(event.signals)
+        .filter((value) => value !== undefined)
+        .map((value) => value.strength));
+      const assertionPriority = /(?:根因.{0,12}(?:明确|清楚)|原因查明|真不是|绝对|完全)/u.test(text)
+        ? 60
+        : /(?:修好了|解决了|搞定|全绿|完成)/u.test(text)
+          ? 40
+          : 0;
+      const score = assertionPriority + scoreQuote(text).score + event.standaloneQuality + event.drama + signal;
+      return { text, score, index };
+    })
+    .sort((left, right) => right.score - left.score || right.index - left.index)[0]?.text;
+}
+
+function claimHeadline(text: string): string {
+  const separator = text.search(/[：:]/u);
+  if (separator >= 4 && separator <= 48) return text.slice(0, separator).trim();
+  return text;
+}
+
 function uniqueEvidence(items: WrappedUiEvidence[], max: number): WrappedUiEvidence[] {
   const seen = new Set<string>();
   const output: WrappedUiEvidence[] = [];
@@ -166,26 +196,42 @@ function storyCard(
 ): WrappedUiCard {
   const eventById = new Map(generated.semanticEvidence.events.map((event) => [event.id, event]));
   const evidence: WrappedUiEvidence[] = [];
+  const claimTexts: string[] = [];
+  const counterTexts: string[] = [];
   for (const story of card.stories) {
     for (const beat of story.beats) {
       const event = beat.evidenceIds.map((id) => eventById.get(id)).find((candidate) => candidate !== undefined);
       if (!event) continue;
       const actor = evidenceActor(event);
       const text = safeEventText(event);
-      if (actor && text) evidence.push({ actor, text });
+      if (actor && text) {
+        evidence.push({ actor, text });
+        if (beat.kind === "claim" && actor === "agent") claimTexts.push(text);
+        if (["failure", "user_pushback", "reversal"].includes(beat.kind)) counterTexts.push(text);
+      }
     }
   }
   const quotable = evidence
     .filter((item) => item.actor === "agent")
     .map((item) => quotableAgentExcerpt(item.text))
     .find((text): text is string => !!text);
+  const falseDawnClaim = card.arcKind === "false_dawn" ? strongestGroundedLine(claimTexts) : undefined;
+  const falseDawnCounter = card.arcKind === "false_dawn" ? strongestGroundedLine(counterTexts) : undefined;
   return {
     id: card.id,
     type: "story",
     kind: card.arcKind,
     label: STORY_LABELS[card.arcKind],
-    title: quotable ? `“${compact(quotable, 72)}”` : compact(card.title, 96),
-    body: card.commentary ? compact(card.commentary, 120) : STORY_COMMENTARY[card.arcKind],
+    title: quotable
+      ? `“${compact(quotable, 72)}”`
+      : falseDawnClaim
+        ? `“${compact(claimHeadline(falseDawnClaim), 72)}”`
+        : compact(card.title, 96),
+    body: falseDawnCounter
+      ? `下一条：${compact(falseDawnCounter, 90)}`
+      : card.commentary
+        ? compact(card.commentary, 120)
+        : STORY_COMMENTARY[card.arcKind],
     evidence: uniqueEvidence(evidence, maxEvidence),
   };
 }

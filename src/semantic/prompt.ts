@@ -96,8 +96,10 @@ export function buildNarrationPrompt(
   const zh = bundle.locale === "zh-CN";
   const system = zh
     ? [
-        "你是 Agent Wrapped 的赛后解说。Story Miner 和本地验证器已经决定了事实结构；你只负责把已验证结构讲得有节目效果。",
+        "你是 Agent Wrapped 的娱乐编辑。Story Miner 和本地验证器只决定了事实结构；事实成立不代表值得展示。你的第一职责是淘汰不好笑的 story，第二职责才是给真正有节目效果的 story 写赛后解说。",
         "不得新增事实、工具结果、用户反应或原话。不要改变 story 的结构。",
+        "storyCards 可以为空，也可以只返回输入 stories 的子集。只有存在明确笑点载体才返回：AI 的判断与现实强烈冲突、荒诞的行为顺序、反常的绕路主动性、责任/角色反转、情绪急转弯，或单独截图也成立的意外台词。",
+        "‘像真人’不是笑点本身。普通认错、接受用户纠正、失败后继续尝试、宣布结束后来了新任务、认真恢复工作，都应省略。比如‘第一轮没看是我的失误’是正常认错，不值得因为态度诚恳而上榜。若朋友看完只会说‘哦’，不要返回。",
         "每个 story 只返回 title 和可选 commentary；commentary 是编辑部解说，不是 Agent 原话，不要用引号伪装成原话。标题尽量 8–24 个汉字，commentary 只写一句、尽量不超过 40 个汉字。",
         "这是赛后大赏，不是审核报告：只放大已验证 beats 之间的行为反差。不要复述完整过程、补充后续诊断、表扬态度、总结价值或写‘修复信任’之类套话。",
         "title/commentary 必须直接对应当前 story 的真实行为，不得套用通用 Bug、测试或大结局模板。",
@@ -108,8 +110,10 @@ export function buildNarrationPrompt(
         "只输出 JSON。",
       ].join("\n")
     : [
-        "You are Agent Wrapped's post-game narrator. Story Miner plus local validation already determined the factual structure; you only make that verified structure entertaining.",
+        "You are Agent Wrapped's entertainment editor. Story Miner plus local validation only established factual structure; truth does not make a story showable. Your first job is to drop unfunny stories, and only then narrate the genuinely entertaining ones.",
         "Do not add facts, tool outcomes, user reactions, or quotations. Do not alter story structure.",
+        "storyCards may be empty or a subset of the input stories. Return a story only when it has a clear laugh carrier: a strong belief-versus-reality collision, absurd action order, bizarre workaround agency, responsibility/role reversal, emotional whiplash, or an accidental line that works as a screenshot.",
+        "Human-like is not automatically funny. Omit ordinary apologies, accepting a user's correction, trying again after failure, new work arriving after an ending, and competent recovery. A line like 'I failed to look the first time; that was my mistake' is a normal admission, not a highlight. If a friend would only reply 'okay, and?', omit it.",
         "For each story return only a concise title and at most one short sentence of editorial commentary. Commentary is not a source quote.",
         "This is a post-game awards show, not an audit report: amplify only the behavioral contrast between verified beats. Do not recap the full process, add later diagnoses, praise the attitude, summarize value, or use trust-restoration boilerplate.",
         "Titles and commentary must directly describe the current verified behavior; never paste a generic bug, test, or finale template.",
@@ -135,7 +139,7 @@ export function buildNarrationPrompt(
   // Use only real IDs and empty fields. Concrete sample prose is easily copied
   // by smaller narrators and can turn an unrelated session into a fake Bug card.
   const shape = {
-    storyCards: stories.map((story) => ({ storyId: story.id, title: "", commentary: "" })),
+    storyCards: [] as Array<{ storyId: string; title: string; commentary?: string }>,
     ...(personaSignals.length > 0 ? { persona: { label: "", tagline: "" } } : {}),
   };
   return {

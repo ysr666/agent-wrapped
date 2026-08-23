@@ -171,19 +171,29 @@ test("CLI renders the final composed Wrapped and supports privacy-safe JSON insp
     source: { host: "dsh", encoding: "jsonl" },
     diagnostics: [],
     messages: [
-      { role: "assistant", host: "dsh", text: "本轮排查闭环完成。" },
-      { role: "user", host: "dsh", text: "等下，又有一个 bug 要看。" },
+      { role: "assistant", host: "dsh", text: "这次已经彻底修好了。" },
+      { role: "user", host: "dsh", text: "还是失败。" },
     ],
     events: [
-      { id: "close", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "本轮排查闭环完成。" },
-      { id: "reopen", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "等下，又有一个 bug 要看。" },
+      { id: "claim", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "这次已经彻底修好了。" },
+      { id: "failure", host: "dsh", actor: "user", kind: "user_message", order: 1, messageIndex: 1, text: "还是失败。" },
     ],
   };
   const dshSessionLoader = async (options) => {
     assert.equal(options.maxSessions, 1);
     return [session];
   };
-  const semanticNarrator = { async generate() { return "{}"; } };
+  const semanticOutputs = [
+    "{}",
+    JSON.stringify({
+      storyCards: [{
+        storyId: "story:0",
+        title: "这次已经彻底修好了，直到下一条还是失败",
+        commentary: "庆功消息的保质期只有一条回复。",
+      }],
+    }),
+  ];
+  const semanticNarrator = { async generate() { return semanticOutputs.shift() ?? "{}"; } };
   const stdout = capture();
   const stderr = capture();
   const code = await runCli(["wrapped", "--latest", "1", "--scores", "--diagnostics"], {
@@ -195,16 +205,24 @@ test("CLI renders the final composed Wrapped and supports privacy-safe JSON insp
   assert.equal(code, 0);
   assert.equal(stderr.value(), "");
   assert.match(stdout.value(), /本场 Agent Wrapped/u);
-  assert.match(stdout.value(), /宣布收尾以后，工作又来了/u);
+  assert.match(stdout.value(), /这次已经彻底修好了/u);
+  assert.match(stdout.value(), /还是失败/u);
   assert.match(stdout.value(), /好玩度/u);
   assert.match(stdout.value(), /候选：P4 0 · P8 1/u);
 
   const json = capture();
+  const jsonSemanticOutputs = [...semanticOutputs];
+  jsonSemanticOutputs.push(
+    "{}",
+    JSON.stringify({
+      storyCards: [{ storyId: "story:0", title: "这次已经彻底修好了，直到下一条还是失败" }],
+    }),
+  );
   assert.equal(await runCli(["wrapped", "--latest", "1", "--json"], {
     stdout: json.output,
     stderr: stderr.output,
     dshSessionLoader,
-    semanticNarrator,
+    semanticNarrator: { async generate() { return jsonSemanticOutputs.shift() ?? "{}"; } },
   }), 0);
   const parsed = JSON.parse(json.value());
   assert.match(parsed.sessions[0].sessionHash, /^[a-f0-9]{12}$/u);
@@ -213,7 +231,7 @@ test("CLI renders the final composed Wrapped and supports privacy-safe JSON insp
   assert.match(parsed.sessions[0].rendered, /本场剧情/u);
 });
 
-test("CLI falls back locally and keeps inspecting later sessions when semantic calls fail", async () => {
+test("CLI falls back locally, keeps inspecting later sessions, and honestly no-cards ordinary work when semantic calls fail", async () => {
   const failing = {
     id: "cli-failing-session",
     host: "dsh",
@@ -249,6 +267,6 @@ test("CLI falls back locally and keeps inspecting later sessions when semantic c
   assert.match(stderr.value(), /Wrapped 1\/2/u);
   assert.match(stderr.value(), /Wrapped 2\/2/u);
   assert.doesNotMatch(stdout.value(), /生成失败/u);
-  assert.match(stdout.value(), /本场剧情/u);
-  assert.match(stdout.value(), /这场暂时没有强到值得上榜的名场面/u);
+  assert.doesNotMatch(stdout.value(), /本场剧情/u);
+  assert.equal(stdout.value().match(/这场暂时没有强到值得上榜的名场面/gu)?.length, 2);
 });

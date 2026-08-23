@@ -22,7 +22,7 @@
 - Share action shows the generation state and then the newspaper poster.
 - `保存分享图` completes and shows `PNG 已保存`.
 - Returning to the result and session works.
-- Switching between all four real golden DSH sessions updates the floating result with the expected recognized episode.
+- Switching between all four real calibration DSH sessions preserves the Composer's honest result: one entertaining card and three explicit no-card sessions after the Entertainment Gate.
 - Real-session mode was verified as `local-deterministic`; raw logs stayed read-only and no transcript/tool payload was sent to a third party.
 - Dismiss and reopen behavior works.
 - Browser console: no errors or warnings.
@@ -31,7 +31,7 @@
 
 - `npm run build`: passed
 - `npm run test:sites`: 4/4 passed
-- Root `npm run test:p8`: 63/63 passed
-- Root `npm test`: 195/195 passed
+- Root `npm run test:p8`: 66/66 passed
+- Root `npm test`: 203/203 passed
 
 final result: passed

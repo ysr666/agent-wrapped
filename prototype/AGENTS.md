@@ -15,5 +15,5 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - `看看本场大赏` opens the complete set of selected conclusions for that session.
 - The tabloid/newspaper visual treatment appears only after the user explicitly chooses Share.
 - Truth is a gate; entertainment and instant recognition are the product outcome.
-- The prototype reads the four local golden DSH sessions through a localhost-only API and receives only the privacy-safe UI payload produced after the real Wrapped Composer.
+- The prototype reads the four local calibration DSH sessions through a localhost-only API and receives only the privacy-safe UI payload produced after the real Wrapped Composer.
 - Real-session generation defaults to the deterministic local path. Sending allowlisted semantic evidence to a configured third-party narrator requires an explicit runtime opt-in; never expose credentials or raw logs to the browser.

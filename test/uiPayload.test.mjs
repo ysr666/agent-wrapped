@@ -118,3 +118,35 @@ test("UI payload preserves honest no-story sessions", () => {
   assert.equal(payload.cards.length, 0);
   assert.equal(payload.emptyMessage, "这场暂时没有强到值得上榜的名场面。");
 });
+
+test("UI false dawn leads with the grounded boast and immediate puncture", () => {
+  const fixture = generatedFixture([{
+    id: "card:story:false-dawn",
+    type: "story",
+    arcKind: "false_dawn",
+    storyIds: ["story:false-dawn"],
+    stories: [{
+      id: "story:false-dawn",
+      windowId: "window:false-dawn",
+      arcKind: "false_dawn",
+      beats: [
+        { kind: "claim", evidenceIds: ["claim"] },
+        { kind: "failure", evidenceIds: ["puncture"] },
+      ],
+      evidenceIds: ["claim", "puncture"],
+      confidence: "high",
+    }],
+    episodeCount: 1,
+    score: 88,
+    confidence: 95,
+    title: "香槟开早了",
+  }]);
+  fixture.semanticEvidence.events.push(
+    { id: "claim", order: 3, actor: "assistant", kind: "assistant_text", text: "OK，完美，这次已经彻底修好了。" },
+    { id: "puncture", order: 4, actor: "user", kind: "user_message", text: "等等，同一个测试还是失败。" },
+  );
+
+  const payload = createWrappedUiPayload(fixture, { publicSessionId: "abc123def456" });
+  assert.equal(payload.cards[0].title, "“OK，完美，这次已经彻底修好了。”");
+  assert.equal(payload.cards[0].body, "下一条：等等，同一个测试还是失败。");
+});

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   composeWrappedCards,
   generateComposedWrapped,
+  hasGroundedComedicTension,
   renderComposedWrappedText,
 } from "../dist/index.js";
 
@@ -129,17 +130,17 @@ test("Wrapped Composer keeps one card for P4/P8 views of the same episode", () =
   ));
 });
 
-test("Wrapped Composer groups repeated arcs by episode, never by beat count", () => {
+test("Wrapped Composer groups repeated funny arcs by episode, never by beat count", () => {
   const session = {
     id: "repeated-finales",
     host: "dsh",
     source: { host: "dsh", encoding: "jsonl" },
     diagnostics: [],
     messages: [
-      { role: "assistant", host: "dsh", text: "本轮闭环完成。" },
-      { role: "user", host: "dsh", text: "等下，又有一个 bug。" },
-      { role: "assistant", host: "dsh", text: "发布闭环完成。" },
-      { role: "user", host: "dsh", text: "再排查一个问题。" },
+      { role: "assistant", host: "dsh", text: "这次已经彻底修好了。" },
+      { role: "user", host: "dsh", text: "测试还是失败。" },
+      { role: "assistant", host: "dsh", text: "现在问题已经完全解决。" },
+      { role: "user", host: "dsh", text: "同一个测试又失败了。" },
     ],
     events: [
       { id: "close-1", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0 },
@@ -151,19 +152,19 @@ test("Wrapped Composer groups repeated arcs by episode, never by beat count", ()
   const stories = [0, 1].map((index) => ({
     id: `story:${index}`,
     windowId: `window:${index}`,
-    arcKind: "ending_then_more_work",
+    arcKind: "false_dawn",
     beats: [
       { kind: "claim", evidenceIds: [`event:close-${index + 1}`] },
-      { kind: "work_reopened", evidenceIds: [`event:reopen-${index + 1}`] },
+      { kind: "failure", evidenceIds: [`event:reopen-${index + 1}`] },
     ],
     evidenceIds: [`event:close-${index + 1}`, `event:reopen-${index + 1}`],
     confidence: "medium",
   }));
   const evidence = semanticEvidence(session.id, [
-    { id: "event:close-1", order: 0, actor: "assistant", kind: "assistant_text", text: "本轮闭环完成。" },
-    { id: "event:reopen-1", order: 1, actor: "user", kind: "user_message", text: "等下，又有一个 bug。" },
-    { id: "event:close-2", order: 2, actor: "assistant", kind: "assistant_text", text: "发布闭环完成。" },
-    { id: "event:reopen-2", order: 3, actor: "user", kind: "user_message", text: "再排查一个问题。" },
+    { id: "event:close-1", order: 0, actor: "assistant", kind: "assistant_text", text: "这次已经彻底修好了。" },
+    { id: "event:reopen-1", order: 1, actor: "user", kind: "user_message", text: "测试还是失败。" },
+    { id: "event:close-2", order: 2, actor: "assistant", kind: "assistant_text", text: "现在问题已经完全解决。" },
+    { id: "event:reopen-2", order: 3, actor: "user", kind: "user_message", text: "同一个测试又失败了。" },
   ]);
   const grouped = composeWrappedCards(session, awardReport(), semanticReport(session.id, stories), evidence);
 
@@ -171,14 +172,14 @@ test("Wrapped Composer groups repeated arcs by episode, never by beat count", ()
   assert.equal(grouped.cards[0].type, "story");
   assert.equal(grouped.cards[0].episodeCount, 2);
   assert.equal(grouped.cards[0].storyIds.length, 2);
-  assert.match(grouped.cards[0].title, /× 2/u);
+  assert.match(grouped.cards[0].title, /香槟开早了 × 2/u);
   assert.match(grouped.cards[0].commentary, /2 次大结局/u);
   const rendered = renderComposedWrappedText(grouped, evidence, { includeScores: true });
-  assert.match(rendered, /宣布收尾以后，工作又来了 × 2/u);
+  assert.match(rendered, /香槟开早了 × 2/u);
   assert.match(rendered, /第 1 幕/u);
   assert.match(rendered, /第 2 幕/u);
   assert.match(rendered, /赛后解说：一个 session，2 次大结局/u);
-  assert.match(rendered, /好玩度 89 · 置信度 82/u);
+  assert.match(rendered, /好玩度 93 · 置信度 82/u);
 
   const fourBeatStory = {
     ...stories[0],
@@ -200,6 +201,71 @@ test("Wrapped Composer groups repeated arcs by episode, never by beat count", ()
   assert.equal(single.cards[0].episodeCount, 1);
 });
 
+test("repeated endings remain no-card when they have no actual laugh carrier", () => {
+  const session = {
+    id: "ordinary-repeated-endings",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [],
+  };
+  const stories = [0, 1].map((index) => ({
+    id: `story:${index}`,
+    windowId: `window:${index}`,
+    arcKind: "ending_then_more_work",
+    beats: [
+      { kind: "claim", evidenceIds: [`event:close-${index}`] },
+      { kind: "work_reopened", evidenceIds: [`event:reopen-${index}`] },
+    ],
+    evidenceIds: [`event:close-${index}`, `event:reopen-${index}`],
+    confidence: "high",
+  }));
+  const evidence = semanticEvidence(session.id, stories.flatMap((story, index) => [
+    { id: story.evidenceIds[0], order: index * 2, actor: "assistant", kind: "assistant_text", text: "本轮工作结束。" },
+    { id: story.evidenceIds[1], order: index * 2 + 1, actor: "user", kind: "user_message", text: "还有一个新问题。" },
+  ]));
+  const report = composeWrappedCards(session, awardReport(), semanticReport(session.id, stories), evidence);
+
+  assert.equal(report.cards.length, 0);
+  assert.equal(report.diagnostics.suppressed.filter((entry) => entry.reason === "no-laugh-carrier").length, 2);
+});
+
+test("an available entertainment editor may drop a true false dawn", () => {
+  const session = {
+    id: "editorial-drop",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [],
+  };
+  const story = {
+    id: "story:false-dawn",
+    windowId: "window:false-dawn",
+    arcKind: "false_dawn",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:claim"] },
+      { kind: "failure", evidenceIds: ["event:failure"] },
+    ],
+    evidenceIds: ["event:claim", "event:failure"],
+    confidence: "high",
+  };
+  const evidence = semanticEvidence(session.id, [
+    { id: "event:claim", order: 0, actor: "assistant", kind: "assistant_text", text: "应该完成了。" },
+    { id: "event:failure", order: 1, actor: "user", kind: "user_message", text: "这里还有问题。" },
+  ]);
+  const report = composeWrappedCards(
+    session,
+    awardReport(),
+    semanticReport(session.id, [story], { narration: { storyCards: [] } }),
+    evidence,
+  );
+
+  assert.equal(report.cards.length, 0);
+  assert.ok(report.diagnostics.suppressed.some((entry) => entry.reason === "narrator-dropped"));
+});
+
 test("composed renderer never prints raw tool payload text", () => {
   const session = {
     id: "safe-tool-render",
@@ -208,30 +274,30 @@ test("composed renderer never prints raw tool payload text", () => {
     diagnostics: [],
     messages: [],
     events: [
-      { id: "call", host: "dsh", actor: "assistant", kind: "tool_call", order: 0, toolName: "bash", toolCategory: "mutation" },
-      { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 1, toolName: "bash", outcome: "failure", exitCode: 1 },
+      { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 0, toolName: "bash", outcome: "blocked", exitCode: 1 },
+      { id: "call", host: "dsh", actor: "assistant", kind: "tool_call", order: 1, toolName: "bash", toolCategory: "mutation" },
     ],
   };
   const story = {
     id: "story:safe",
     windowId: "window:safe",
-    arcKind: "reversal",
+    arcKind: "capability_gap_then_improvisation",
     beats: [
-      { kind: "attempt", evidenceIds: ["event:call"] },
-      { kind: "failure", evidenceIds: ["event:result"] },
+      { kind: "capability_gap", evidenceIds: ["event:result"] },
+      { kind: "workaround", evidenceIds: ["event:call"] },
     ],
-    evidenceIds: ["event:call", "event:result"],
+    evidenceIds: ["event:result", "event:call"],
     confidence: "high",
   };
   const evidence = semanticEvidence(session.id, [
-    { id: "event:call", order: 0, actor: "assistant", kind: "tool_call", toolName: "bash", toolCategory: "mutation", text: "SOURCE_SENTINEL" },
-    { id: "event:result", order: 1, actor: "tool", kind: "tool_result", toolName: "bash", outcome: "failure", exitCode: 1, text: "RESULT_SENTINEL" },
+    { id: "event:result", order: 0, actor: "tool", kind: "tool_result", toolName: "bash", outcome: "blocked", exitCode: 1, text: "RESULT_SENTINEL" },
+    { id: "event:call", order: 1, actor: "assistant", kind: "tool_call", toolName: "bash", toolCategory: "mutation", text: "SOURCE_SENTINEL" },
   ]);
   const report = composeWrappedCards(session, awardReport(), semanticReport(session.id, [story]), evidence);
   const rendered = renderComposedWrappedText(report, evidence);
 
   assert.match(rendered, /bash \(mutation\)/u);
-  assert.match(rendered, /bash \(failure, exit 1\)/u);
+  assert.match(rendered, /bash \(blocked, exit 1\)/u);
   assert.doesNotMatch(rendered, /SOURCE_SENTINEL|RESULT_SENTINEL/u);
 });
 
@@ -306,7 +372,7 @@ test("Wrapped Composer does not force filler cards or an unsupported persona", (
   assert.ok(composed.diagnostics.suppressed.some((entry) => entry.reason === "weak-persona"));
 });
 
-test("Wrapped Composer removes unreadable correction prose and a Persona that repeats the Story joke", () => {
+test("Wrapped Composer drops ordinary admission even when narration dresses it up", () => {
   const session = {
     id: "clean-final-show",
     host: "dsh",
@@ -365,12 +431,15 @@ test("Wrapped Composer removes unreadable correction prose and a Persona that re
     evidence,
   );
 
-  assert.deepEqual(report.cards.map((card) => card.type), ["story"]);
+  assert.deepEqual(report.cards, []);
   assert.ok(report.diagnostics.suppressed.some((entry) =>
     entry.id.includes("broken-correction") && entry.reason === "unreadable-card"
   ));
   assert.ok(report.diagnostics.suppressed.some((entry) =>
-    entry.id === "card:persona" && entry.reason === "editorial-duplicate" && entry.winnerId === report.cards[0].id
+    entry.id.includes("story:callout") && entry.reason === "no-laugh-carrier"
+  ));
+  assert.ok(report.diagnostics.suppressed.some((entry) =>
+    entry.id === "card:persona" && entry.reason === "no-laugh-carrier"
   ));
 });
 
@@ -387,11 +456,17 @@ test("Wrapped Composer keeps a Persona whose character metaphor adds a different
     id: "story:finale",
     windowId: "window:finale",
     arcKind: "false_dawn",
-    beats: [],
-    evidenceIds: [],
+    beats: [
+      { kind: "claim", evidenceIds: ["event:claim"] },
+      { kind: "failure", evidenceIds: ["event:failure"] },
+    ],
+    evidenceIds: ["event:claim", "event:failure"],
     confidence: "high",
   };
-  const evidence = semanticEvidence(session.id, []);
+  const evidence = semanticEvidence(session.id, [
+    { id: "event:claim", order: 0, actor: "assistant", kind: "assistant_text", text: "两次都已经彻底修好了。" },
+    { id: "event:failure", order: 1, actor: "user", kind: "user_message", text: "两次都还在失败。" },
+  ]);
   const report = composeWrappedCards(
     session,
     awardReport(),
@@ -439,7 +514,7 @@ test("Wrapped Composer caps the final highlight reel at five cards", () => {
   assert.equal(composed.diagnostics.suppressed.filter((entry) => entry.reason === "card-limit").length, 1);
 });
 
-test("generateComposedWrapped runs both candidate routes and returns the final card set", async () => {
+test("generateComposedWrapped leaves an ordinary reopened-work session empty", async () => {
   const session = {
     id: "composed-end-to-end",
     host: "dsh",
@@ -460,6 +535,55 @@ test("generateComposedWrapped runs both candidate routes and returns the final c
 
   assert.equal(generated.awardReport.awards.length, 0);
   assert.equal(generated.semanticReport.stories.length, 1);
-  assert.equal(generated.report.cards.length, 1);
-  assert.equal(generated.report.cards[0].type, "story");
+  assert.equal(generated.semanticReport.stories.length, 1);
+  assert.equal(generated.report.cards.length, 0);
+  assert.ok(generated.report.diagnostics.suppressed.some((entry) => entry.reason === "no-laugh-carrier"));
+});
+
+test("Entertainment Gate separates human-like-but-normal from actual comic tension", () => {
+  const evidence = semanticEvidence("gate", [
+    { id: "event:pushback", order: 0, actor: "user", kind: "user_message", text: "你第一轮没看图。" },
+    { id: "event:admission", order: 1, actor: "assistant", kind: "assistant_text", text: "第一轮没看是我的失误。" },
+    { id: "event:victory", order: 2, actor: "assistant", kind: "assistant_text", text: "OK，完美，已经修好了。" },
+    { id: "event:failed", order: 3, actor: "user", kind: "user_message", text: "等等，测试又失败了。" },
+    { id: "event:gap", order: 4, actor: "assistant", kind: "assistant_text", text: "没有生图工具。" },
+    { id: "event:svg", order: 5, actor: "assistant", kind: "tool_call", toolName: "write", toolCategory: "mutation" },
+  ]);
+  const ordinaryAdmission = {
+    id: "story:admission",
+    windowId: "window:admission",
+    arcKind: "user_pushback_then_recovery",
+    beats: [
+      { kind: "user_pushback", evidenceIds: ["event:pushback"] },
+      { kind: "correction", evidenceIds: ["event:admission"] },
+    ],
+    evidenceIds: ["event:pushback", "event:admission"],
+    confidence: "high",
+  };
+  const champagneFaceplant = {
+    id: "story:false-dawn",
+    windowId: "window:false-dawn",
+    arcKind: "false_dawn",
+    beats: [
+      { kind: "claim", evidenceIds: ["event:victory"] },
+      { kind: "failure", evidenceIds: ["event:failed"] },
+    ],
+    evidenceIds: ["event:victory", "event:failed"],
+    confidence: "high",
+  };
+  const stubbornImprovisation = {
+    id: "story:improv",
+    windowId: "window:improv",
+    arcKind: "capability_gap_then_improvisation",
+    beats: [
+      { kind: "capability_gap", evidenceIds: ["event:gap"] },
+      { kind: "workaround", evidenceIds: ["event:svg"] },
+    ],
+    evidenceIds: ["event:gap", "event:svg"],
+    confidence: "high",
+  };
+
+  assert.equal(hasGroundedComedicTension(ordinaryAdmission, evidence), false);
+  assert.equal(hasGroundedComedicTension(champagneFaceplant, evidence), true);
+  assert.equal(hasGroundedComedicTension(stubbornImprovisation, evidence), true);
 });

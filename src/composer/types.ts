@@ -45,6 +45,8 @@ export type ComposedWrappedCard = ComposedAwardCard | ComposedStoryCard | Compos
 export type ComposedCardSuppressionReason =
   | "cross-route-duplicate"
   | "editorial-duplicate"
+  | "no-laugh-carrier"
+  | "narrator-dropped"
   | "unreadable-card"
   | "story-card-limit"
   | "card-limit"
