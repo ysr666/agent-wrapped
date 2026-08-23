@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   aggregatePersonaSignals,
   admitStoriesForWrapped,
+  buildHighlightScoutPrompt,
   buildNarrationPrompt,
   buildSemanticEvidenceFromMoments,
   buildStoryMinerPrompt,
@@ -11,6 +12,7 @@ import {
   createWrappedReport,
   classifyToolOutcome,
   generateSemanticStoryPersona,
+  parseHighlightScoutOutput,
   parseNarrationOutput,
   parseStoryMinerOutput,
   renderSemanticStoryPersonaText,
@@ -276,6 +278,7 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.match(miner.system, /工作流水/u);
   assert.match(miner.system, /失败后的技术诊断 claim 不是剧情转折/u);
   assert.ok(miner.user.includes('"windowId"'));
+  assert.ok(!miner.user.includes('"scoutEvents"'));
   assert.ok(!miner.user.includes('"score":'));
 
   const parsed = parseStoryMinerOutput(minedFailureWorkaround(firstWindowId(evidence)));
@@ -290,6 +293,9 @@ test("Story Miner prompt requires one local window and structure only", () => {
   assert.match(narration.system, /娱乐编辑/u);
   assert.match(narration.system, /像真人.*不是笑点/u);
   assert.match(narration.system, /普通认错/u);
+  assert.match(narration.system, /不要因技术背景或整体克制而习惯性返回空/u);
+  assert.match(narration.system, /自曝自己编造/u);
+  assert.match(narration.system, /失败者与成果之间的角色反转/u);
   assert.match(narration.system, /禁止输出 0-100/u);
   assert.match(narration.system, /赛后大赏，不是审核报告/u);
   assert.match(narration.system, /区别于 story title\/commentary/u);
@@ -462,6 +468,148 @@ test("remote semantic evidence excludes raw tool payload sentinels", () => {
   assert.equal(evidence.events.find((event) => event.id === "event:result")?.callId, "call:0");
   assert.equal(localEvents[0].toolArguments, privatePayload);
   assert.equal(localEvents[1].text, privatePayload);
+});
+
+test("Entertainment Editor receives broad redacted dialogue but never tool or system payloads", () => {
+  const evidence = buildSemanticEvidenceFromMoments({
+    id: "broad-scout-boundary",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "early", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, text: "我已重启自己。" },
+      { id: "secret", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, text: "Cookie: session=visible-cookie\nAuthorization: Basic abc123==\neyJhbGciOiJIUzI1NiJ9.payload.signature\npostgres://user:password@localhost/app" },
+      { id: "call", host: "dsh", actor: "tool", kind: "tool_call", order: 2, toolName: "bash", toolArguments: "SOURCE_SENTINEL" },
+      { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 3, toolName: "bash", text: "RESULT_SENTINEL" },
+      { id: "system", host: "dsh", actor: "system", kind: "unknown", order: 4, text: "SYSTEM_SENTINEL" },
+    ],
+  }, [], { coverageWindows: 0 });
+
+  assert.ok(evidence.scoutEvents.some((event) => event.id === "event:early"));
+  assert.ok(evidence.scoutEvents.every((event) => event.actor === "assistant" || event.actor === "user"));
+  const remote = JSON.stringify(evidence);
+  assert.doesNotMatch(remote, /visible-cookie|abc123|eyJhbGci|postgres:\/\/|SOURCE_SENTINEL|RESULT_SENTINEL|SYSTEM_SENTINEL/u);
+});
+
+test("Story Miner and one editor can publish a grounded standalone line without a Story", async () => {
+  const targetSession = {
+    id: "standalone-highlight",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [{ role: "assistant", host: "dsh", text: "我已重启自己。" }],
+    events: [{ id: "line", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "我已重启自己。" }],
+  };
+  const outputs = [
+    JSON.stringify({ stories: [], insufficientEvidence: "No multi-event story." }),
+    JSON.stringify({ storyCards: [], highlightCards: [{ highlightId: "highlight:0", title: "服务器没重启，它先重启了自己", commentary: "主语很有自己的想法。" }] }),
+  ];
+  const requests = [];
+  const { report } = await generateSemanticStoryPersona(targetSession, {
+    async generate(request) { requests.push(request); return outputs.shift(); },
+  }, { coverageWindows: 0 });
+
+  assert.equal(requests.length, 2);
+  assert.equal(report.stories.length, 0);
+  assert.equal(report.highlights.length, 1);
+  assert.equal(report.narration.highlightCards[0].highlightId, "highlight:0");
+  assert.ok(!requests[0].user.includes("SOURCE_SENTINEL"));
+});
+
+test("generic chunked Scout shortlists grounded ids before the unchanged Entertainment Editor", async () => {
+  const normalEvents = Array.from({ length: 14 }, (_, index) => ({
+    id: `normal-${index}`,
+    host: "dsh",
+    actor: "assistant",
+    kind: "assistant_text",
+    order: index + 2,
+    messageIndex: index + 1,
+    text: `NORMAL_MARKER_${index} ${"普通技术进度".repeat(20)}`,
+  }));
+  const targetSession = {
+    id: "chunked-highlight-scout",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [],
+    events: [
+      { id: "target", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "I tried to use a made-up attachment ID." },
+      { id: "private-tool", host: "dsh", actor: "tool", kind: "tool_result", order: 1, toolName: "shell", toolArguments: "SOURCE_SENTINEL", text: "RESULT_SENTINEL" },
+      ...normalEvents,
+    ],
+  };
+  const requests = [];
+  let scoutCalls = 0;
+  const { report } = await generateSemanticStoryPersona(targetSession, {
+    async generate(request) {
+      requests.push(request);
+      if (request.system.includes("职责只有一个")) {
+        return JSON.stringify({ stories: [], insufficientEvidence: "No multi-event story." });
+      }
+      if (request.system.includes("通用候选 Scout")) {
+        scoutCalls += 1;
+        if (scoutCalls === 1) return JSON.stringify({ highlightIds: [] });
+        return JSON.stringify({ highlightIds: ["highlight:0", "highlight:unknown"] });
+      }
+      return JSON.stringify({
+        storyCards: [],
+        highlightCards: [{ highlightId: "highlight:0", title: "附件 ID 是现场编的" }],
+      });
+    },
+  }, { coverageWindows: 0 });
+
+  assert.equal(requests.length, 4);
+  assert.match(requests[1].system, /不是最终评委/u);
+  assert.match(requests[3].user, /made-up attachment ID/u);
+  assert.doesNotMatch(requests[3].user, /NORMAL_MARKER_13/u);
+  assert.equal(report.highlights.length, 1);
+  assert.equal(report.highlights[0].eventId, "event:target");
+  assert.equal(report.diagnostics.highlightScoutUsed, true);
+  assert.equal(report.diagnostics.highlightScoutChunks, 1);
+  assert.equal(report.diagnostics.highlightScoutRetries, 1);
+  assert.equal(report.diagnostics.highlightScoutFailures, 0);
+  assert.equal(report.diagnostics.highlightShortlistCount, 1);
+  assert.doesNotMatch(JSON.stringify(requests), /SOURCE_SENTINEL|RESULT_SENTINEL/u);
+});
+
+test("highlight Scout output is locally bounded and cannot introduce unknown ids", () => {
+  const highlights = [
+    { id: "highlight:0", eventId: "event:0", contextIds: [], evidenceIds: ["event:0"], confidence: "high" },
+    { id: "highlight:1", eventId: "event:1", contextIds: [], evidenceIds: ["event:1"], confidence: "high" },
+  ];
+  const prompt = buildHighlightScoutPrompt({ locale: "zh-CN" }, highlights, [
+    { id: "event:0", order: 0, actor: "assistant", kind: "assistant_text", text: "我把自己重启了。" },
+    { id: "event:1", order: 1, actor: "assistant", kind: "assistant_text", text: "普通进度。" },
+  ]);
+  assert.match(prompt.system, /最多 4 条/u);
+  assert.match(prompt.system, /这是召回阶段，不是第二道 Gate/u);
+  assert.doesNotMatch(prompt.user, /title|commentary|reason/u);
+  assert.deepEqual(parseHighlightScoutOutput(JSON.stringify({
+    highlightIds: ["highlight:0", "highlight:unknown", "highlight:0"],
+  }), highlights), ["highlight:0"]);
+  assert.throws(() => parseHighlightScoutOutput(JSON.stringify({
+    highlightIds: ["highlight:0", "highlight:1", "x", "y", "z"],
+  }), highlights), /invalid highlightIds/u);
+});
+
+test("editor id alias is accepted only when it names a locally verified highlight", () => {
+  const highlights = [{
+    id: "highlight:0",
+    eventId: "event:line",
+    contextIds: [],
+    evidenceIds: ["event:line"],
+    confidence: "high",
+  }];
+  const parsed = parseNarrationOutput(JSON.stringify({
+    storyCards: [],
+    highlightCards: [{ id: "highlight:0", title: "自编附件 ID 致失败" }],
+  }), [], [], "zh-CN", highlights);
+  assert.equal(parsed.highlightCards[0].highlightId, "highlight:0");
+  assert.throws(() => parseNarrationOutput(JSON.stringify({
+    storyCards: [],
+    highlightCards: [{ id: "highlight:999", title: "假的" }],
+  }), [], [], "zh-CN", highlights), /unknown highlight id/u);
 });
 
 test("local episode projection distinguishes exact retries without exporting arguments", () => {
@@ -870,7 +1018,7 @@ test("routine tool trajectories stay verified locally but do not become Wrapped 
     },
   };
   const { report } = await generateSemanticStoryPersona(session(), narrator);
-  assert.equal(requests.length, 1, "routine trajectories must not spend a second call on commentary");
+  assert.equal(requests.length, 2, "the final editor still inspects the grounded dialogue pool independently of Story admission");
   assert.equal(report.version, 3);
   assert.equal(report.stories.length, 0);
   assert.equal(report.personaSignals.length, 0);
@@ -1019,7 +1167,7 @@ test("a verified bare correction stops before narration and persona", async () =
   const narrator = { async generate(request) { requests.push(request); return outputs.shift(); } };
   const { report } = await generateSemanticStoryPersona(targetSession, narrator, { coverageWindows: 0 });
 
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
   assert.equal(report.stories.length, 0);
   assert.equal(report.personaSignals.length, 0);
   assert.equal(report.diagnostics?.verifiedStoryCount, 1);

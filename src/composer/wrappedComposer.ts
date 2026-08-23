@@ -14,6 +14,7 @@ import type { WrappedReport } from "../wrapped/types.js";
 import type {
   ComposedAwardCard,
   ComposedPersonaCard,
+  ComposedHighlightCard,
   ComposedStoryCard,
   ComposedWrappedCard,
   ComposedWrappedReport,
@@ -275,10 +276,50 @@ function personaCandidate(report: SemanticStoryPersonaReport): Candidate | undef
 function candidateOrder(left: Candidate, right: Candidate): number {
   if (right.card.score !== left.card.score) return right.card.score - left.card.score;
   if (right.card.confidence !== left.card.confidence) return right.card.confidence - left.card.confidence;
-  const priority = (card: ComposedWrappedCard): number => card.type === "award" ? 3 : card.type === "story" ? 2 : 1;
+  const priority = (card: ComposedWrappedCard): number => card.type === "highlight" ? 4 : card.type === "award" ? 3 : card.type === "story" ? 2 : 1;
   const type = priority(right.card) - priority(left.card);
   if (type !== 0) return type;
   return left.card.id.localeCompare(right.card.id);
+}
+
+function highlightCandidates(
+  report: SemanticStoryPersonaReport,
+  evidence: SemanticEvidenceBundle,
+  eventById: Map<string, SessionEvent>,
+): Candidate[] {
+  const verified = new Map((report.highlights ?? []).map((highlight) => [highlight.id, highlight]));
+  const scoutEvents = new Map((evidence.scoutEvents ?? []).map((event) => [event.id, event]));
+  return (report.narration?.highlightCards ?? []).flatMap((editorial): Candidate[] => {
+    const highlight = verified.get(editorial.highlightId);
+    const source = highlight ? scoutEvents.get(highlight.eventId) : undefined;
+    if (!highlight || !source || source.actor !== "assistant" || source.kind !== "assistant_text") return [];
+    const card: ComposedHighlightCard = {
+      id: `card:highlight:${highlight.id}`,
+      type: "highlight",
+      highlightId: highlight.id,
+      highlight,
+      quote: source.text,
+      score: 92,
+      confidence: confidenceNumber(highlight.confidence),
+      title: editorial.title,
+      commentary: editorial.commentary,
+    };
+    const contextTexts = highlight.contextIds
+      .map((id) => scoutEvents.get(id)?.text)
+      .filter((text): text is string => !!text);
+    return [{
+      card,
+      messageIndexes: new Set(highlight.evidenceIds
+        .map((id) => {
+          const scoutEvent = scoutEvents.get(id);
+          return eventById.get(scoutEvent?.sourceEventId ?? id)?.messageIndex;
+        })
+        .filter((index): index is number => index !== undefined)),
+      texts: [source.text, ...contextTexts],
+      editorialTexts: [editorial.title, editorial.commentary, source.text]
+        .filter((text): text is string => !!text),
+    }];
+  });
 }
 
 export function composeWrappedCards(
@@ -301,6 +342,13 @@ export function composeWrappedCards(
     const decision = evaluateAwardEntertainment(award);
     if (decision.show) candidates.push(awardCandidate(award, currentToOriginal));
     else suppressed.push({ id: `card:award:${award.id}`, reason: decision.reason });
+  }
+  candidates.push(...highlightCandidates(semanticReport, semanticEvidence, eventById));
+  const narratedHighlightIds = new Set((semanticReport.narration?.highlightCards ?? []).map((card) => card.highlightId));
+  for (const highlight of semanticReport.highlights ?? []) {
+    if (!narratedHighlightIds.has(highlight.id)) {
+      suppressed.push({ id: `card:highlight:${highlight.id}`, reason: "narrator-dropped" });
+    }
   }
   const storiesByArc = new Map<StoryArcKind, VerifiedStoryArc[]>();
   for (const story of semanticReport.stories) {
@@ -335,9 +383,9 @@ export function composeWrappedCards(
       continue;
     }
     const duplicate = selected.find((winner) =>
-      winner.card.type !== candidate.card.type &&
       winner.card.type !== "persona" &&
       candidate.card.type !== "persona" &&
+      (winner.card.type !== candidate.card.type || candidate.card.type === "highlight") &&
       candidatesOverlap(winner, candidate)
     );
     if (duplicate) {
@@ -374,6 +422,7 @@ export function composeWrappedCards(
     diagnostics: {
       sourceAwards: awardReport.awards.length,
       sourceStories: semanticReport.stories.length,
+      sourceHighlights: semanticReport.highlights?.length ?? 0,
       groupedStoryEpisodes: [...storiesByArc.values()].reduce((sum, stories) => sum + Math.max(0, stories.length - 1), 0),
       sourcePersona: !!semanticReport.narration?.persona,
       suppressed,

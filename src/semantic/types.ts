@@ -49,6 +49,22 @@ export interface SemanticStoryWindow {
 }
 
 /**
+ * A redacted, dialogue-only projection used by the generic recall Scout and
+ * the final Entertainment Editor.
+ * It deliberately excludes every tool/system payload while preserving broad
+ * session coverage that narrow Story windows cannot provide.
+ */
+export interface SemanticScoutEvent {
+  id: string;
+  /** Original local narrative event alias when this is one excerpt of a long event. */
+  sourceEventId?: string;
+  order: number;
+  actor: "user" | "assistant";
+  kind: "user_message" | "assistant_text";
+  text: string;
+}
+
+/**
  * Bounded, redacted evidence supplied to Story Miner. Unlike P8 v1, Story
  * Discovery is not gated by P3 top moments: event windows are selected directly
  * from the observable session stream, while Moment hints are only a secondary signal.
@@ -62,6 +78,8 @@ export interface SemanticEvidenceBundle {
   locale: AwardLocale;
   events: SemanticEvidenceEvent[];
   windows: SemanticStoryWindow[];
+  /** Broad, bounded dialogue recall for standalone lines and surrounding context. */
+  scoutEvents?: SemanticScoutEvent[];
   momentHints: SemanticMomentHint[];
   redactionCount: number;
   truncated: boolean;
@@ -106,6 +124,15 @@ export interface SemanticStoryCandidate {
   confidence: "high" | "medium" | "low";
 }
 
+/** Locally grounded standalone candidate. Presentation prose is still absent. */
+export interface VerifiedSemanticHighlight {
+  id: string;
+  eventId: string;
+  contextIds: string[];
+  evidenceIds: string[];
+  confidence: "high" | "medium" | "low";
+}
+
 export interface VerifiedStoryBeat {
   kind: StoryBeatKind;
   evidenceIds: string[];
@@ -146,6 +173,11 @@ export interface SemanticNarration {
     title: string;
     commentary?: string;
   }>;
+  highlightCards?: Array<{
+    highlightId: string;
+    title: string;
+    commentary?: string;
+  }>;
   persona?: {
     /** Must remain session-scoped, e.g. “本场表现像……”. */
     label: string;
@@ -158,6 +190,8 @@ export interface SemanticStoryPersonaReport {
   locale: AwardLocale;
   sessionId: string;
   stories: VerifiedStoryArc[];
+  /** Truth-verified standalone candidates selected by the Entertainment Editor. */
+  highlights?: VerifiedSemanticHighlight[];
   personaSignals: SemanticPersonaSignal[];
   narration?: SemanticNarration;
   /** Editorial narration is optional; verified local structure remains usable if it is unavailable. */
@@ -167,6 +201,14 @@ export interface SemanticStoryPersonaReport {
     verifiedStoryCount: number;
     suppressedStoryCount: number;
     suppressionReasons: Record<string, number>;
+    /** Generic LLM shortlist telemetry; contains counts only, never transcript text. */
+    highlightPoolCount?: number;
+    highlightScoutUsed?: boolean;
+    highlightScoutChunks?: number;
+    /** Second recall samples used to stabilize a non-deterministic fast model. */
+    highlightScoutRetries?: number;
+    highlightScoutFailures?: number;
+    highlightShortlistCount?: number;
   };
   insufficientEvidence?: string;
   evidenceUsed: string[];

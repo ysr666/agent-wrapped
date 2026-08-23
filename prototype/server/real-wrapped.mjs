@@ -46,12 +46,12 @@ async function loadDshOpenRouterConfig() {
   };
 }
 
-function openRouterModel(session) {
-  const model = session.model?.trim();
-  if (!model) return "deepseek/deepseek-v4-flash";
-  if (model.includes("/")) return model;
-  if (model.startsWith("deepseek-")) return `deepseek/${model}`;
-  return model;
+function semanticAnalysisModel(options) {
+  return options.semanticModel?.trim() || process.env.AGENT_WRAPPED_LLM_MODEL?.trim() || "deepseek/deepseek-v4-flash";
+}
+
+function shortHash(value) {
+  return createHash("sha256").update(value).digest("hex").slice(0, 8);
 }
 
 async function engineCacheVersion() {
@@ -86,6 +86,7 @@ async function loadEngine() {
 export function createRealWrappedService(options = {}) {
   const hashes = options.sessionHashes ?? CALIBRATION_SESSION_HASHES;
   const allowRemote = options.allowRemote ?? /^(?:1|true|yes)$/iu.test(process.env.AGENT_WRAPPED_ALLOW_REMOTE_REAL_SESSIONS?.trim() ?? "");
+  const analysisModel = semanticAnalysisModel(options);
   const generationCache = new Map();
   let sessionsPromise;
   let configPromise;
@@ -120,7 +121,7 @@ export function createRealWrappedService(options = {}) {
     const promise = (async () => {
       const session = (await sessions()).find((candidate) => publicSessionHash(candidate.id) === hash);
       if (!session) throw new Error("Requested real session is not in the local calibration set.");
-      const version = `${await engineCacheVersion()}-${allowRemote ? "remote" : "local"}`;
+      const version = `${await engineCacheVersion()}-${allowRemote ? `remote-${shortHash(`${analysisModel}:t0:json:timeout120`)}` : "local"}`;
       const cached = await readCachedPayload(hash, version);
       if (cached) return { ...cached, cached: true };
       const engine = await loadEngine();
@@ -131,8 +132,10 @@ export function createRealWrappedService(options = {}) {
         narrator = engine.createOpenAICompatibleNarrator({
           baseUrl: config.baseUrl,
           apiKey: config.apiKey,
-          model: openRouterModel(session),
-          timeoutMs: 60000,
+          model: analysisModel,
+          temperature: 0,
+          jsonMode: true,
+          timeoutMs: 120000,
         });
       } else {
         narrator = { async generate() { throw new Error("Remote real-session narration is disabled."); } };

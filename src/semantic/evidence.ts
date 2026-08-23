@@ -12,6 +12,7 @@ import type {
   SemanticEvidenceBundle,
   SemanticEvidenceEvent,
   SemanticMomentHint,
+  SemanticScoutEvent,
   SemanticStoryWindow,
 } from "./types.js";
 
@@ -31,6 +32,10 @@ export interface SemanticEvidenceOptions {
   maxEventChars?: number;
   /** Approximate total textual evidence cap. Defaults to 18000. */
   maxEvidenceChars?: number;
+  /** Hard cap on dialogue excerpts supplied to the generic recall Scout. Defaults to 600. */
+  maxScoutEvents?: number;
+  /** Hard cap on the broad dialogue projection. Defaults to 60000 characters. */
+  maxScoutEvidenceChars?: number;
 }
 
 interface WindowCandidate {
@@ -75,6 +80,22 @@ function clip(text: string, maxChars: number): { text: string; clipped: boolean 
   return { text: `${normalized.slice(0, Math.max(0, maxChars - 1))}…`, clipped: true };
 }
 
+function distributedClip(text: string, maxChars: number): { text: string; clipped: boolean } {
+  const normalized = text.trim();
+  if (normalized.length <= maxChars) return { text: normalized, clipped: false };
+  if (maxChars < 12) return { text: normalized.slice(0, maxChars), clipped: true };
+  const marker = " … ";
+  const available = maxChars - marker.length * 2;
+  const head = Math.ceil(available / 3);
+  const middle = Math.floor(available / 3);
+  const tail = available - head - middle;
+  const middleStart = Math.max(head, Math.floor((normalized.length - middle) / 2));
+  return {
+    text: `${normalized.slice(0, head)}${marker}${normalized.slice(middleStart, middleStart + middle)}${marker}${normalized.slice(-tail)}`,
+    clipped: true,
+  };
+}
+
 export function redactSemanticText(input: string): { text: string; redactions: number } {
   let text = input;
   let redactions = 0;
@@ -86,6 +107,13 @@ export function redactSemanticText(input: string): { text: string; redactions: n
   };
 
   replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}=*/giu, "Bearer [REDACTED]");
+  replace(/\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/=._~-]{4,}/giu, "Authorization: Basic [REDACTED]");
+  replace(/\bCookie\s*:\s*[^\r\n]+/giu, "Cookie: [REDACTED]");
+  replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\b/gu, "[REDACTED_JWT]");
+  replace(/-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/gu, "[REDACTED_PRIVATE_KEY]");
+  replace(/-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----/gu, "[REDACTED_PRIVATE_KEY]");
+  replace(/\bgithub_pat_[A-Za-z0-9_]{6,}\b/gu, "[REDACTED_KEY]");
+  replace(/\b(?:postgres(?:ql)?|mysql):\/\/[^\s"'<>]+/giu, "[REDACTED_CONNECTION_STRING]");
   replace(/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|AIza[0-9A-Za-z_-]{20,})\b/gu, "[REDACTED_KEY]");
   replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|secret)\b\s*[:=]\s*["']?([^\s"',;]{6,})/giu, (_match, key) => `${key}=[REDACTED]`);
   replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[REDACTED_EMAIL]");
@@ -93,6 +121,90 @@ export function redactSemanticText(input: string): { text: string; redactions: n
   replace(/\/home\/[^/\s]+\//gu, "/home/[USER]/");
   replace(/\b[A-Za-z]:\\Users\\[^\\\s]+\\/gu, "C:\\Users\\[USER]\\");
   return { text, redactions };
+}
+
+interface ScoutEventGroup {
+  source: SessionEvent & {
+    actor: "user" | "assistant";
+    kind: "user_message" | "assistant_text";
+    text: string;
+  };
+  fragments: string[];
+}
+
+function scoutTextFragments(text: string, maxFragmentChars = 320): { fragments: string[]; truncated: boolean } {
+  const paragraphs = text.split(/\n{2,}|(?<=[。！？!?])\s+/gu).map((part) => part.trim()).filter(Boolean);
+  const fragments: string[] = [];
+  let truncated = false;
+  for (const paragraph of paragraphs) {
+    const clipped = distributedClip(paragraph, maxFragmentChars);
+    truncated ||= clipped.clipped;
+    fragments.push(clipped.text);
+  }
+  if (fragments.length <= 6) return { fragments, truncated };
+  const selected = [fragments[0], fragments[1], fragments[Math.floor(fragments.length / 2)], fragments.at(-3), fragments.at(-2), fragments.at(-1)]
+    .filter((value): value is string => !!value)
+    .filter((value, index, all) => all.indexOf(value) === index);
+  return { fragments: selected, truncated: true };
+}
+
+function scoutEvents(
+  events: SessionEvent[],
+  options: SemanticEvidenceOptions,
+): { events: SemanticScoutEvent[]; redactions: number; truncated: boolean } {
+  const narrative = events.filter((event): event is ScoutEventGroup["source"] => (
+    (event.actor === "user" || event.actor === "assistant") &&
+    (event.kind === "user_message" || event.kind === "assistant_text") &&
+    typeof event.text === "string" && !!event.text.trim()
+  ));
+  const maxEvents = clampInt(options.maxScoutEvents, 600, 8, 1200);
+  const selectedSources = narrative.length <= maxEvents
+    ? narrative
+    : Array.from({ length: maxEvents }, (_, index) => narrative[Math.floor(index * narrative.length / maxEvents)])
+      .filter((event, index, all) => all.indexOf(event) === index);
+  const maxChars = clampInt(options.maxScoutEvidenceChars, 60000, 4000, 120000);
+  const primaryChars = Math.max(48, Math.min(320, Math.floor(maxChars / Math.max(1, selectedSources.length))));
+  const output: SemanticScoutEvent[] = [];
+  let usedChars = 0;
+  let redactions = 0;
+  let truncated = selectedSources.length < narrative.length;
+  const groups: ScoutEventGroup[] = selectedSources.map((source) => {
+    const redacted = redactSemanticText(source.text);
+    redactions += redacted.redactions;
+    const split = scoutTextFragments(redacted.text);
+    truncated ||= split.truncated;
+    return { source, fragments: split.fragments };
+  });
+  const add = (group: ScoutEventGroup, fragmentIndex: number, maxFragmentChars: number): void => {
+    const fragment = group.fragments[fragmentIndex];
+    if (!fragment || output.length >= maxEvents) return;
+    const clipped = distributedClip(fragment, maxFragmentChars);
+    truncated ||= clipped.clipped;
+    if (!clipped.text || usedChars + clipped.text.length > maxChars) {
+      truncated = true;
+      return;
+    }
+    const sourceEventId = `event:${group.source.id}`;
+    output.push({
+      id: group.fragments.length === 1 ? sourceEventId : `${sourceEventId}:snippet:${fragmentIndex}`,
+      ...(group.fragments.length === 1 ? {} : { sourceEventId }),
+      order: group.source.order,
+      actor: group.source.actor,
+      kind: group.source.kind,
+      text: clipped.text,
+    });
+    usedChars += clipped.text.length;
+  };
+  for (const group of groups) add(group, 0, primaryChars);
+  for (let fragmentIndex = 1; fragmentIndex < 6 && output.length < maxEvents; fragmentIndex += 1) {
+    for (const group of groups) {
+      if (output.length >= maxEvents) break;
+      add(group, fragmentIndex, 320);
+    }
+  }
+  if (groups.some((group) => group.fragments.length > 1) && output.length >= maxEvents) truncated = true;
+  output.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  return { events: output, redactions, truncated };
 }
 
 function normalizedEvents(session: IngestedSession): SessionEvent[] {
@@ -660,6 +772,9 @@ export function buildSemanticEvidenceFromMoments(
   }
 
   const finalHints = momentHints(rankedMoments, events, includedEventIds, options);
+  const broadScout = scoutEvents(events, options);
+  redactionCount += broadScout.redactions;
+  truncated ||= broadScout.truncated;
   const eventIdSet = new Set(evidenceEvents.map((event) => event.id));
   const semanticWindows: SemanticStoryWindow[] = windows.map((window, index) => ({
     id: `window:${index}`,
@@ -677,6 +792,7 @@ export function buildSemanticEvidenceFromMoments(
     locale,
     events: evidenceEvents,
     windows: semanticWindows,
+    scoutEvents: broadScout.events,
     momentHints: finalHints.hints,
     redactionCount,
     truncated,

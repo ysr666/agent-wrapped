@@ -7,12 +7,13 @@ import type { AwardKind } from "../awards/types.js";
 import type {
   ComposedAwardCard,
   ComposedPersonaCard,
+  ComposedHighlightCard,
   ComposedStoryCard,
   ComposedWrappedCard,
   GeneratedComposedWrapped,
 } from "./types.js";
 
-export type WrappedUiCardKind = AwardKind | ComposedStoryCard["arcKind"] | "persona";
+export type WrappedUiCardKind = AwardKind | ComposedStoryCard["arcKind"] | "llm-highlight" | "persona";
 
 export interface WrappedUiEvidence {
   actor: "agent" | "user" | "tool";
@@ -175,13 +176,18 @@ function awardCard(card: ComposedAwardCard, maxEvidence: number): WrappedUiCard 
   const related = award.relatedTexts.map((text) => compact(text, 96)).filter(Boolean);
   const count = award.count && award.count > 1 ? award.count : undefined;
   const title = count ? `${primary} ×${count}` : primary;
+  const repeatedBody = count && card.awardKind === "wolf-cry"
+    ? `一个 session，${count} 次大结局。`
+    : count && card.awardKind === "catchphrase"
+      ? `本场一共出现 ${count} 次。`
+      : undefined;
   return {
     id: card.id,
     type: "award",
     kind: card.awardKind,
     label: AWARD_LABELS[card.awardKind],
     title,
-    body: related.length > 0 ? related.join(" → ") : undefined,
+    body: repeatedBody ?? (related.length > 0 ? related.join(" → ") : undefined),
     evidence: uniqueEvidence([
       { actor: "agent", text: primary, count },
       ...related.map((text) => ({ actor: "agent" as const, text })),
@@ -248,6 +254,29 @@ function personaCard(card: ComposedPersonaCard): WrappedUiCard {
   };
 }
 
+function highlightCard(
+  card: ComposedHighlightCard,
+  generated: GeneratedComposedWrapped,
+  maxEvidence: number,
+): WrappedUiCard {
+  const scoutById = new Map((generated.semanticEvidence.scoutEvents ?? []).map((event) => [event.id, event]));
+  const quote = compact(card.quote, 128);
+  const context = card.highlight.contextIds.flatMap((id): WrappedUiEvidence[] => {
+    const event = scoutById.get(id);
+    if (!event) return [];
+    return [{ actor: event.actor === "assistant" ? "agent" : "user", text: compact(event.text, 96) }];
+  });
+  return {
+    id: card.id,
+    type: "highlight",
+    kind: "llm-highlight",
+    label: "本场金句",
+    title: `“${quote}”`,
+    body: compact(card.title, 120),
+    evidence: uniqueEvidence([{ actor: "agent", text: quote }, ...context], maxEvidence),
+  };
+}
+
 /**
  * Convert the final Composer result into the only shape the local UI receives.
  * Raw SessionEvent tool payloads and durable session ids never enter this object.
@@ -260,6 +289,7 @@ export function createWrappedUiPayload(
   const cards = generated.report.cards.map((card): WrappedUiCard => {
     if (card.type === "award") return awardCard(card, maxEvidence);
     if (card.type === "story") return storyCard(card, generated, maxEvidence);
+    if (card.type === "highlight") return highlightCard(card, generated, maxEvidence);
     return personaCard(card);
   });
   return {

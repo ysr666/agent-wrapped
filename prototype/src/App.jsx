@@ -23,7 +23,7 @@ const decorationByLabel = {
 function visualKind(card) {
   if (card?.type === "persona") return "admission";
   if (["catchphrase", "wolf-cry"].includes(card?.kind)) return "catchphrase";
-  if (["quote", "emotional-peak"].includes(card?.kind)) return "admission";
+  if (["quote", "emotional-peak", "llm-highlight"].includes(card?.kind)) return "admission";
   if (["premature-celebration", "ending_then_more_work"].includes(card?.kind)) return "ending";
   return "twist";
 }
@@ -44,7 +44,7 @@ function payloadToSession(payload, metadata) {
     workspaceTitle: metadata?.title ?? payload.title,
     category: strongest.label,
     kind: visualKind(strongest),
-    strongestLabel: strongest.type === "award" ? "本场最强一句" : "本场最强结论",
+    strongestLabel: ["award", "highlight"].includes(strongest.type) ? "本场最强一句" : "本场最强结论",
     strongest: strongest.title,
     payoff: strongest.body ?? "真实 Composer 认为这是本场最值得看的内容。",
     title: strongest.title,

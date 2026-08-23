@@ -1,7 +1,7 @@
 import type { IngestedSession } from "../ingest/types.js";
 import { buildSemanticEvidence, type SemanticEvidenceOptions } from "./evidence.js";
 import { aggregatePersonaSignals } from "./persona.js";
-import { buildNarrationPrompt, buildStoryMinerPrompt } from "./prompt.js";
+import { buildHighlightScoutPrompt, buildNarrationPrompt, buildStoryMinerPrompt } from "./prompt.js";
 import { admitStoriesForWrapped } from "./storyAdmission.js";
 import {
   inferAuthorityBoundaryStoryCandidates,
@@ -16,6 +16,7 @@ import type {
   SemanticPersonaSignal,
   SemanticStoryPersonaReport,
   VerifiedStoryArc,
+  VerifiedSemanticHighlight,
 } from "./types.js";
 
 interface JsonObject { [key: string]: unknown }
@@ -84,6 +85,7 @@ export function parseNarrationOutput(
   stories: VerifiedStoryArc[],
   personaSignals: SemanticPersonaSignal[],
   locale: "zh-CN" | "en",
+  highlights: VerifiedSemanticHighlight[] = [],
 ): SemanticNarration {
   let parsed: unknown;
   try {
@@ -122,6 +124,33 @@ export function parseNarrationOutput(
     }
   }
 
+  const highlightIds = new Set(highlights.map((highlight) => highlight.id));
+  const seenHighlightIds = new Set<string>();
+  const highlightCards: NonNullable<SemanticNarration["highlightCards"]> = [];
+  if (root.highlightCards !== undefined && root.highlightCards !== null) {
+    if (!Array.isArray(root.highlightCards) || root.highlightCards.length > highlights.length) {
+      throw new Error("Semantic narrator returned invalid highlightCards.");
+    }
+    for (const [index, value] of root.highlightCards.entries()) {
+      const entry = object(value);
+      if (!entry) throw new Error(`Semantic narrator returned invalid highlightCards[${index}].`);
+      const highlightId = boundedText(entry.highlightId ?? entry.id, `highlightCards[${index}].highlightId`, 80);
+      if (!highlightIds.has(highlightId)) throw new Error(`Semantic narrator referenced unknown highlight id: ${highlightId}`);
+      if (seenHighlightIds.has(highlightId)) throw new Error(`Semantic narrator duplicated highlight id: ${highlightId}`);
+      seenHighlightIds.add(highlightId);
+      const title = boundedText(entry.title, `highlightCards[${index}].title`, 100);
+      const commentary = optionalBoundedText(entry.commentary, `highlightCards[${index}].commentary`, 260);
+      if (hiddenStateClaim(title) || unsupportedUserCausality(title)) continue;
+      highlightCards.push({
+        highlightId,
+        title,
+        ...(commentary && !hiddenStateClaim(commentary) && !unsupportedUserCausality(commentary)
+          ? { commentary }
+          : {}),
+      });
+    }
+  }
+
   let persona: SemanticNarration["persona"];
   if (root.persona !== undefined && root.persona !== null) {
     if (personaSignals.length === 0) throw new Error("Semantic narrator returned a persona without deterministic persona signals.");
@@ -133,13 +162,13 @@ export function parseNarrationOutput(
       hiddenStateClaim(`${label}\n${tagline}`) ||
       unsupportedUserCausality(`${label}\n${tagline}`) ||
       literalSignalWrapper(label, personaSignals)
-    ) return { storyCards };
+    ) return { storyCards, ...(highlightCards.length > 0 ? { highlightCards } : {}) };
     if (locale === "zh-CN" && !/^本场/u.test(label)) label = `本场表现像${label}`;
     if (locale === "en" && !/\bsession\b/iu.test(label)) label = `This session played like ${label}`;
     persona = { label, tagline };
   }
 
-  return { storyCards, persona };
+  return { storyCards, ...(highlightCards.length > 0 ? { highlightCards } : {}), persona };
 }
 
 export interface GenerateSemanticStoryPersonaOptions extends SemanticEvidenceOptions {}
@@ -147,6 +176,8 @@ export interface GenerateSemanticStoryPersonaOptions extends SemanticEvidenceOpt
 function storyDiagnostics(
   verifiedStoryCount: number,
   suppressed: ReturnType<typeof admitStoriesForWrapped>["suppressed"],
+  highlightPoolCount = 0,
+  scout?: HighlightScoutResult,
 ): NonNullable<SemanticStoryPersonaReport["diagnostics"]> {
   const suppressionReasons: Record<string, number> = {};
   for (const entry of suppressed) {
@@ -156,13 +187,210 @@ function storyDiagnostics(
     verifiedStoryCount,
     suppressedStoryCount: suppressed.length,
     suppressionReasons,
+    highlightPoolCount,
+    highlightScoutUsed: scout?.used ?? false,
+    highlightScoutChunks: scout?.chunks ?? 0,
+    highlightScoutRetries: scout?.retries ?? 0,
+    highlightScoutFailures: scout?.failures ?? 0,
+    highlightShortlistCount: scout?.highlights.length ?? highlightPoolCount,
+  };
+}
+
+function groundedHighlightPool(evidence: SemanticEvidenceBundle): VerifiedSemanticHighlight[] {
+  const scoutEvents = evidence.scoutEvents ?? [];
+  const highlights: VerifiedSemanticHighlight[] = [];
+  for (const [index, event] of scoutEvents.entries()) {
+    if (event.actor !== "assistant" || event.kind !== "assistant_text" || event.text.trim().length < 4) continue;
+    const neighbors = [scoutEvents[index - 1], scoutEvents[index + 1]]
+      .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate)
+      .filter((candidate) => candidate.id !== event.id)
+      .map((candidate) => candidate.id)
+      .filter((id, neighborIndex, all) => all.indexOf(id) === neighborIndex);
+    highlights.push({
+      id: `highlight:${highlights.length}`,
+      eventId: event.id,
+      contextIds: neighbors,
+      evidenceIds: [event.id, ...neighbors],
+      confidence: "high",
+    });
+  }
+  return highlights;
+}
+
+const DIRECT_EDITOR_MAX_HIGHLIGHTS = 12;
+const DIRECT_EDITOR_MAX_CHARS = 2400;
+const SCOUT_CHUNK_MAX_HIGHLIGHTS = 32;
+const SCOUT_CHUNK_MAX_CHARS = 7000;
+const SCOUT_SELECTIONS_PER_CHUNK = 4;
+const SCOUT_MAX_SHORTLIST = 24;
+
+interface HighlightScoutChunk {
+  highlights: VerifiedSemanticHighlight[];
+  events: NonNullable<SemanticEvidenceBundle["scoutEvents"]>;
+}
+
+interface HighlightScoutResult {
+  highlights: VerifiedSemanticHighlight[];
+  used: boolean;
+  chunks: number;
+  retries: number;
+  failures: number;
+}
+
+function highlightEvidenceChars(
+  highlights: VerifiedSemanticHighlight[],
+  eventById: Map<string, NonNullable<SemanticEvidenceBundle["scoutEvents"]>[number]>,
+): number {
+  const ids = new Set(highlights.flatMap((highlight) => highlight.evidenceIds));
+  return [...ids].reduce((sum, id) => sum + (eventById.get(id)?.text.length ?? 0), 0);
+}
+
+function buildHighlightScoutChunks(
+  evidence: SemanticEvidenceBundle,
+  highlights: VerifiedSemanticHighlight[],
+): HighlightScoutChunk[] {
+  const scoutEvents = evidence.scoutEvents ?? [];
+  const eventById = new Map(scoutEvents.map((event) => [event.id, event]));
+  const chunks: HighlightScoutChunk[] = [];
+  let chunkHighlights: VerifiedSemanticHighlight[] = [];
+  let chunkEventIds = new Set<string>();
+  let chunkChars = 0;
+
+  const flush = (): void => {
+    if (chunkHighlights.length === 0) return;
+    chunks.push({
+      highlights: chunkHighlights,
+      events: [...chunkEventIds]
+        .map((id) => eventById.get(id))
+        .filter((event): event is NonNullable<typeof event> => !!event)
+        .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id)),
+    });
+    chunkHighlights = [];
+    chunkEventIds = new Set<string>();
+    chunkChars = 0;
+  };
+
+  for (const highlight of highlights) {
+    const newEventIds = highlight.evidenceIds.filter((id) => !chunkEventIds.has(id) && eventById.has(id));
+    const addedChars = newEventIds.reduce((sum, id) => sum + (eventById.get(id)?.text.length ?? 0), 0);
+    if (
+      chunkHighlights.length > 0 &&
+      (chunkHighlights.length >= SCOUT_CHUNK_MAX_HIGHLIGHTS || chunkChars + addedChars > SCOUT_CHUNK_MAX_CHARS)
+    ) flush();
+    chunkHighlights.push(highlight);
+    for (const id of highlight.evidenceIds) {
+      const event = eventById.get(id);
+      if (!event || chunkEventIds.has(id)) continue;
+      chunkEventIds.add(id);
+      chunkChars += event.text.length;
+    }
+  }
+  flush();
+  return chunks;
+}
+
+export function parseHighlightScoutOutput(
+  raw: string,
+  allowedHighlights: VerifiedSemanticHighlight[],
+): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripCodeFence(raw));
+  } catch {
+    throw new Error("Semantic highlight Scout did not return valid JSON.");
+  }
+  const root = object(parsed);
+  const values = root?.highlightIds ?? root?.ids;
+  if (!Array.isArray(values) || values.length > SCOUT_SELECTIONS_PER_CHUNK) {
+    throw new Error("Semantic highlight Scout returned invalid highlightIds.");
+  }
+  const allowedIds = new Set(allowedHighlights.map((highlight) => highlight.id));
+  const selected: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") throw new Error("Semantic highlight Scout returned a non-string id.");
+    const id = value.trim();
+    if (!allowedIds.has(id) || selected.includes(id)) continue;
+    selected.push(id);
+  }
+  return selected;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+async function shortlistHighlights(
+  narrator: SemanticNarrator,
+  evidence: SemanticEvidenceBundle,
+  pool: VerifiedSemanticHighlight[],
+): Promise<HighlightScoutResult> {
+  const scoutEvents = evidence.scoutEvents ?? [];
+  const eventById = new Map(scoutEvents.map((event) => [event.id, event]));
+  const chars = highlightEvidenceChars(pool, eventById);
+  if (pool.length <= DIRECT_EDITOR_MAX_HIGHLIGHTS && chars <= DIRECT_EDITOR_MAX_CHARS) {
+    return { highlights: pool, used: false, chunks: 0, retries: 0, failures: 0 };
+  }
+
+  const chunks = buildHighlightScoutChunks(evidence, pool);
+  const runChunk = async (chunk: HighlightScoutChunk): Promise<{ ids: string[]; failed: boolean }> => {
+    try {
+      const raw = await narrator.generate(buildHighlightScoutPrompt(evidence, chunk.highlights, chunk.events));
+      return { ids: parseHighlightScoutOutput(raw, chunk.highlights), failed: false };
+    } catch {
+      return { ids: [] as string[], failed: true };
+    }
+  };
+  const selections = await mapWithConcurrency(chunks, 3, runChunk);
+  // The configured fast model is observably non-deterministic even at
+  // temperature 0. Use two recall samples per chunk and union only locally
+  // verified ids; the strict Editor still runs once.
+  const retryIndexes = chunks.map((_chunk, index) => index);
+  const retries = await mapWithConcurrency(retryIndexes, 3, async (index) => runChunk(chunks[index]));
+  for (const [retryIndex, retry] of retries.entries()) {
+    const original = selections[retryIndexes[retryIndex]];
+    original.ids = [...original.ids, ...retry.ids].filter((id, index, all) => all.indexOf(id) === index);
+    original.failed = original.failed && retry.failed;
+  }
+  const orderedIds: string[] = [];
+  for (let rank = 0; rank < SCOUT_SELECTIONS_PER_CHUNK; rank += 1) {
+    for (const selection of selections) {
+      const id = selection.ids[rank];
+      if (id && !orderedIds.includes(id)) orderedIds.push(id);
+      if (orderedIds.length >= SCOUT_MAX_SHORTLIST) break;
+    }
+    if (orderedIds.length >= SCOUT_MAX_SHORTLIST) break;
+  }
+  const highlightById = new Map(pool.map((highlight) => [highlight.id, highlight]));
+  return {
+    highlights: orderedIds
+      .map((id) => highlightById.get(id))
+      .filter((highlight): highlight is VerifiedSemanticHighlight => !!highlight),
+    used: true,
+    chunks: chunks.length,
+    retries: retryIndexes.length,
+    failures: selections.filter((selection) => selection.failed).length,
   };
 }
 
 /**
- * P8 v2 pipeline:
- * event evidence -> Story Miner(structure only) -> local validation ->
- * deterministic persona aggregation -> Narrator(editorial language only).
+ * Unified entertainment pipeline:
+ * bounded evidence -> Story Miner(P8 structure only) + generic chunked LLM
+ * shortlist over locally grounded lines -> local id validation -> one strict
+ * Entertainment Editor(selection/copy).
  */
 export async function generateSemanticStoryPersona(
   session: IngestedSession,
@@ -170,7 +398,7 @@ export async function generateSemanticStoryPersona(
   options: GenerateSemanticStoryPersonaOptions = {},
 ): Promise<{ report: SemanticStoryPersonaReport; evidence: SemanticEvidenceBundle }> {
   const evidence = buildSemanticEvidence(session, options);
-  if (evidence.events.length < 2 || evidence.windows.length === 0) {
+  if (evidence.events.length < 2 && (evidence.scoutEvents?.length ?? 0) === 0) {
     return {
       evidence,
       report: {
@@ -178,6 +406,7 @@ export async function generateSemanticStoryPersona(
         locale: evidence.locale,
         sessionId: evidence.sessionId,
         stories: [],
+        highlights: [],
         personaSignals: [],
         insufficientEvidence: evidence.locale === "zh-CN"
           ? "当前会话没有足够的可观察事件来发现剧情。"
@@ -206,15 +435,19 @@ export async function generateSemanticStoryPersona(
     ...inferAuthorityBoundaryStoryCandidates(evidence),
     ...inferHumanTurnStoryCandidates(evidence),
   ], evidence);
+  // Every redacted assistant excerpt is already truth-grounded by construction.
+  // The generic Scout only narrows large pools by id; it has no authority to
+  // publish a card and does not introduce behavior-specific lanes.
   const admission = admitStoriesForWrapped(validation.stories, evidence);
   const stories = admission.stories;
+  const highlightPool = groundedHighlightPool(evidence);
   // A generic worklog trajectory must not create a personality card by itself.
   // Persona only competes for presentation once an episode itself earned a
   // showable Story slot.
   const personaSignals = stories.length > 0 ? aggregatePersonaSignals(stories, evidence) : [];
-  const diagnostics = storyDiagnostics(validation.stories.length, admission.suppressed);
 
-  if (stories.length === 0 && personaSignals.length === 0) {
+  if (stories.length === 0 && highlightPool.length === 0 && personaSignals.length === 0) {
+    const diagnostics = storyDiagnostics(validation.stories.length, admission.suppressed);
     return {
       evidence,
       report: {
@@ -222,6 +455,7 @@ export async function generateSemanticStoryPersona(
         locale: evidence.locale,
         sessionId: evidence.sessionId,
         stories: [],
+        highlights: [],
         personaSignals: [],
         diagnostics,
         insufficientEvidence: validation.stories.length > 0
@@ -236,19 +470,45 @@ export async function generateSemanticStoryPersona(
     };
   }
 
+  const scout = await shortlistHighlights(narrator, evidence, highlightPool);
+  const highlights = scout.highlights;
+  const diagnostics = storyDiagnostics(validation.stories.length, admission.suppressed, highlightPool.length, scout);
+
+  if (stories.length === 0 && highlights.length === 0 && personaSignals.length === 0) {
+    return {
+      evidence,
+      report: {
+        version: 3,
+        locale: evidence.locale,
+        sessionId: evidence.sessionId,
+        stories: [],
+        highlights: [],
+        personaSignals: [],
+        diagnostics,
+        insufficientEvidence: evidence.locale === "zh-CN"
+          ? "通用候选 Scout 没有召回值得交给最终娱乐编辑复审的台词。"
+          : "The generic candidate Scout recalled no line worth sending to the final entertainment editor.",
+        evidenceUsed: [],
+      },
+    };
+  }
+
   let narration: SemanticNarration | undefined;
   let narrationUnavailable = false;
   try {
-    const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, stories, personaSignals));
-    narration = parseNarrationOutput(narrationRaw, stories, personaSignals, evidence.locale);
+    const narrationRaw = await narrator.generate(buildNarrationPrompt(evidence, stories, personaSignals, highlights));
+    narration = parseNarrationOutput(narrationRaw, stories, personaSignals, evidence.locale, highlights);
   } catch {
     // Narration is editorial only. Preserve the already verified local facts
     // rather than dropping a session because a remote prose call failed or
     // returned malformed JSON. Deliberately do not retain remote error text.
     narrationUnavailable = true;
   }
+  const narratedHighlightIds = new Set((narration?.highlightCards ?? []).map((card) => card.highlightId));
+  const selectedHighlights = highlights.filter((highlight) => narratedHighlightIds.has(highlight.id));
   const evidenceUsed = [
     ...stories.flatMap((story) => story.evidenceIds),
+    ...selectedHighlights.flatMap((highlight) => highlight.evidenceIds),
     ...personaSignals.flatMap((signal) => signal.evidenceIds),
   ].filter((id, index, all) => all.indexOf(id) === index);
 
@@ -259,12 +519,19 @@ export async function generateSemanticStoryPersona(
       locale: evidence.locale,
       sessionId: evidence.sessionId,
       stories,
+      highlights: selectedHighlights,
       personaSignals,
       narration,
       ...(narrationUnavailable ? { narrationUnavailable: true } : {}),
       diagnostics,
-      insufficientEvidence: validation.rejected.length > 0 && stories.length === 0
-        ? mining.insufficientEvidence
+      insufficientEvidence: stories.length === 0 && selectedHighlights.length === 0
+        ? (validation.stories.length > 0
+          ? (evidence.locale === "zh-CN"
+            ? "验证到的结构没有足够明确的人类可感知戏剧张力，最终娱乐编辑也没有选出值得上榜的台词，因此不上榜。"
+            : "Verified structure lacked a clear human-visible dramatic turn, and the entertainment editor selected no showable line.")
+          : mining.insufficientEvidence ?? (evidence.locale === "zh-CN"
+            ? "Story Miner 暂时不可用，已仅使用本地确定性证据；最终没有内容通过娱乐编辑。"
+            : "Story Miner was unavailable; deterministic local evidence was used and nothing passed the entertainment edit."))
         : undefined,
       evidenceUsed,
     },

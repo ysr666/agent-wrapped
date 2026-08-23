@@ -7,6 +7,7 @@ import type {
   SemanticStoryPersonaReport,
   StoryArcKind,
   VerifiedStoryArc,
+  VerifiedSemanticHighlight,
 } from "../semantic/types.js";
 import type { GenerateSemanticStoryPersonaOptions } from "../semantic/storyPersona.js";
 import type { CreateWrappedReportOptions, WrappedReport } from "../wrapped/types.js";
@@ -33,6 +34,15 @@ export interface ComposedStoryCard extends ComposedCardBase {
   commentary?: string;
 }
 
+export interface ComposedHighlightCard extends ComposedCardBase {
+  type: "highlight";
+  highlightId: string;
+  /** Exact redacted local evidence text; never authored by the LLM. */
+  quote: string;
+  commentary?: string;
+  highlight: VerifiedSemanticHighlight;
+}
+
 export interface ComposedPersonaCard extends ComposedCardBase {
   type: "persona";
   label: string;
@@ -40,7 +50,7 @@ export interface ComposedPersonaCard extends ComposedCardBase {
   signals: SemanticPersonaSignal[];
 }
 
-export type ComposedWrappedCard = ComposedAwardCard | ComposedStoryCard | ComposedPersonaCard;
+export type ComposedWrappedCard = ComposedAwardCard | ComposedStoryCard | ComposedHighlightCard | ComposedPersonaCard;
 
 export type ComposedCardSuppressionReason =
   | "cross-route-duplicate"
@@ -60,6 +70,7 @@ export interface ComposedWrappedReport {
   diagnostics: {
     sourceAwards: number;
     sourceStories: number;
+    sourceHighlights: number;
     groupedStoryEpisodes: number;
     sourcePersona: boolean;
     suppressed: Array<{

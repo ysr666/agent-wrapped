@@ -137,6 +137,11 @@ export function renderComposedWrappedText(
       lines.push(card.title, renderAwardPlainBody(card.award, report.locale));
     } else if (card.type === "story") {
       lines.push(...storyLines(card, evidence, zh));
+    } else if (card.type === "highlight") {
+      lines.push(zh ? `🏆 本场金句：\“${clip(card.quote, 120)}\”` : `🏆 Quote: \“${clip(card.quote, 120)}\”`);
+      if (card.commentary ?? card.title) {
+        lines.push(zh ? `🎙️ 赛后解说：${card.commentary ?? card.title}` : `🎙️ Commentary: ${card.commentary ?? card.title}`);
+      }
     } else {
       lines.push(card.title, card.tagline);
     }

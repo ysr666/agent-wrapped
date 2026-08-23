@@ -2,6 +2,7 @@ import type {
   SemanticEvidenceBundle,
   SemanticNarratorRequest,
   SemanticPersonaSignal,
+  VerifiedSemanticHighlight,
   VerifiedStoryArc,
 } from "./types.js";
 
@@ -10,7 +11,7 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
   const system = zh
     ? [
         "你是 Agent Wrapped 的 Story Miner。你的职责只有一个：从有限、已脱敏的会话事件里识别可验证的剧情结构。",
-        "不要写标题、解说、人格、分数或任何娱乐文案。不要补写不存在的事实。",
+        "不要写标题、解说、人格、分数、金句或任何娱乐文案。不要补写不存在的事实。单句娱乐候选由后续通用 Scout 召回、最终 Editor 决定，不由你筛选。",
         "每个 story 必须选择一个真实 windowId；该 story 的所有 beat 只能引用这个 window 内的 event:*，禁止把不同窗口、相隔很远的事件拼成一个故事。若 window.reasons 含 failure-followup-episode，表示本地已验证：一个 failure/blocked tool result 与后续的安全替代动作已形成同一底层 episode；若含 human-turn-episode，表示本地已跨过中间的工具/系统噪声保留同一轮真人发言与 Agent 改口。不要因为原始命令和结果正文被刻意省略就拒绝这些结构。",
         "每个 beat 只能引用 event:* 证据；momentHints 只用于提示哪里可能有结构，不能作为 beat 的事实证据。",
         "beats 必须按真实时间顺序排列；attempt/workaround 应对应真实工具动作，correction/reversal 需要明确改口。workaround 只能引用带有 followupOfCallId、且 followupRelation 为 alternative_action 或 variant_arguments_retry 的工具调用；same_arguments_retry 与 same_tool_arguments_unknown 绝不能算 workaround。success 只能引用 outcome=success 的工具事件；outcome=observation 或 unknown 绝不是 success，且工具动作成功不等于整个用户任务完成。",
@@ -21,7 +22,7 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
       ].join("\n")
     : [
         "You are Agent Wrapped's Story Miner. Your only job is to identify verifiable story structure from bounded, redacted session events.",
-        "Do not write titles, commentary, persona labels, scores, or invented facts.",
+        "Do not write titles, commentary, persona labels, scores, standalone quotes, or invented facts. A later generic Scout recalls line candidates and the final Editor decides; you do not filter them.",
         "Every story must choose one real windowId, and every beat must cite event:* evidence from that same window. Never stitch distant or separate windows into one story. A window reason of failure-followup-episode means local validation already established that a failure/blocked result and a later safe alternative action belong to one underlying episode. human-turn-episode means local projection kept one human/Agent correction exchange together across intervening tool or system noise. Do not reject these structures merely because raw commands and result bodies are deliberately absent.",
         "momentHints may guide attention but are not factual beat evidence.",
         "Beats must follow real chronology. attempt/workaround should map to real tool actions and correction/reversal needs explicit reversal evidence. A workaround may only cite a tool call with followupOfCallId and followupRelation=alternative_action or variant_arguments_retry; same_arguments_retry and same_tool_arguments_unknown are never workarounds. success may only cite tool events with outcome=success; outcome=observation or unknown is never success, and a successful tool action is not proof that the whole user task succeeded.",
@@ -75,6 +76,7 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
     allowedArcKinds,
     allowedBeatKinds,
   };
+  const storyEvidence = { ...bundle, scoutEvents: undefined };
 
   return {
     system,
@@ -83,7 +85,50 @@ export function buildStoryMinerPrompt(bundle: SemanticEvidenceBundle): SemanticN
       JSON.stringify(instructions, null, 2),
       "",
       zh ? "真实 evidence：" : "Actual evidence:",
-      JSON.stringify(bundle, null, 2),
+      JSON.stringify(storyEvidence, null, 2),
+    ].join("\n"),
+  };
+}
+
+/**
+ * High-recall, low-authority pass over one bounded dialogue chunk. It may only
+ * nominate locally issued highlight ids; the final Entertainment Editor still
+ * decides whether any nomination is actually showable.
+ */
+export function buildHighlightScoutPrompt(
+  bundle: Pick<SemanticEvidenceBundle, "locale">,
+  highlights: VerifiedSemanticHighlight[],
+  events: NonNullable<SemanticEvidenceBundle["scoutEvents"]>,
+): SemanticNarratorRequest {
+  const zh = bundle.locale === "zh-CN";
+  const system = zh
+    ? [
+        "你是 Agent Wrapped 的通用候选 Scout，不是最终评委，也不写文案。",
+        "从这一小块已脱敏对话中，高召回地挑出最多 4 条可能值得最终娱乐编辑复审的 assistant 原句。按潜在节目效果从强到弱排列，只返回输入中的 highlightId。",
+        "寻找原句或紧邻上下文里真实存在的意外反差：像活人般的失言、自曝、荒诞行为、突然破防、判断被现实刺穿，或其他朋友可能愿意截图的异常瞬间。不要依赖固定关键词，也不要把类别当成通过标准。",
+        "这是召回阶段，不是第二道 Gate：原文明示 Agent 编造了并不存在的输入/对象/动作，或执行者异常退出但成果仍完整留下时，必须提名对应原句；其他真实边界案例不确定时也交给最终 Editor 淘汰，不要习惯性返回空。",
+        "普通进度播报、技术解释、礼貌道歉和称职完成通常不必召回，但不要把上述自曝或角色反转误当成普通技术说明。",
+        "不得生成标题、解说、理由、引语或新事实。不得返回未知 ID。只输出 JSON。",
+      ].join("\n")
+    : [
+        "You are Agent Wrapped's generic candidate Scout, not the final judge and not a copywriter.",
+        "From this small redacted dialogue chunk, recall at most four assistant excerpts that may deserve review by the final entertainment editor. Rank them by potential entertainment value and return only input highlightIds.",
+        "Look for a real unexpected contrast in the exact line or immediate context: human-like slips or self-exposure, absurd behavior, a sudden breakdown, confidence punctured by reality, or another abnormal moment a friend might screenshot. Do not depend on fixed keywords or treat a category as a pass.",
+        "This is recall, not a second Gate. If the exact text says the Agent fabricated a nonexistent input/object/action, or that workers terminated abnormally while their complete deliverables remained, you must nominate the corresponding line. Send other genuine borderline cases to the final Editor when uncertain instead of defaulting to empty.",
+        "Routine progress, technical explanation, polite apology, and competent completion usually need no recall, but do not misclassify those self-exposures or role reversals as ordinary technical prose.",
+        "Do not write titles, commentary, reasons, quotes, or new facts. Never return an unknown id. Return JSON only.",
+      ].join("\n");
+  return {
+    system,
+    user: [
+      zh ? "只返回这个形状：" : "Return only this shape:",
+      JSON.stringify({ highlightIds: [] as string[] }, null, 2),
+      "",
+      zh ? "本块候选 ID 与已脱敏对话：" : "Candidate ids and redacted dialogue for this chunk:",
+      JSON.stringify({
+        highlights: highlights.map((highlight) => ({ id: highlight.id, eventId: highlight.eventId })),
+        events,
+      }, null, 2),
     ].join("\n"),
   };
 }
@@ -92,12 +137,20 @@ export function buildNarrationPrompt(
   bundle: SemanticEvidenceBundle,
   stories: VerifiedStoryArc[],
   personaSignals: SemanticPersonaSignal[],
+  highlights: VerifiedSemanticHighlight[] = [],
 ): SemanticNarratorRequest {
   const zh = bundle.locale === "zh-CN";
   const system = zh
     ? [
         "你是 Agent Wrapped 的娱乐编辑。Story Miner 和本地验证器只决定了事实结构；事实成立不代表值得展示。你的第一职责是淘汰不好笑的 story，第二职责才是给真正有节目效果的 story 写赛后解说。",
         "不得新增事实、工具结果、用户反应或原话。不要改变 story 的结构。",
+        "做明确决策，不要因技术背景或整体克制而习惯性返回空：如果 shortlist 中至少一条原句清楚、自带反差，并明确满足下述意外自曝、失败者与成果角色反转、荒诞行为或现实打脸之一，必须返回其中最强的一条；只有所有候选都只是普通工作内容时才返回空。",
+        "highlightCards 也可以为空或只返回输入 highlights 的极小子集。输入 highlights 只表示这些 assistant 原文真实存在，不表示它们有趣；你必须继续严格淘汰绝大多数普通台词。highlight 的原话由本地 eventId 决定；你只写奖项标题和可选的一句赛后解说，禁止改写、拼接或伪造引语。",
+        "逐条审阅 evidence.scoutEvents；这些台词只是通用 Scout 的高召回 shortlist，仍须用 highlights 中的 eventId 找到对应 highlightId，并按当前严格标准大量淘汰。单句候选不需要 story、用户打脸或第二条证据；只要原句本身已经形成意外反差就可以入选。",
+        "重点比较这些跨类型反差，而不是建新分类：可见文本意外泄露内部独白或承认编造了对象/动作；Agent 把自己说成有肉身、能重启或会破防；执行者失败/消失但成果反而已交付；正常能力失效后发明荒诞但有效的绕路；确定结论紧接着被现实推翻。它们仍需达到截图价值，普通技术说明和普通认错继续淘汰。",
+        "highlightCard 必须只靠被引用的那一句 assistant 原文就能让朋友看懂笑点。需要前后多步才能成立的荒诞绕路、失败后成功或结论被打脸，只能选对应 storyCard，不能把其中普通的进度播报冒充金句。像‘我试试本地 OCR’‘本地 OCR 成功了’这类正常执行文本必须淘汰。不要因为执行力、恢复速度或解决问题的态度而表扬它。",
+        "不要把‘普通技术说明’解释得过宽：Agent 在可见原文里明确自曝自己编造了并不存在的输入、对象或动作，笑点是它把自己的穿帮过程说了出来；多个执行者异常退出/消失但完整成果反而已经留下，笑点是失败者与成果之间的角色反转。这两类只要原句清楚、自带反差，就应认真竞争上榜，而不是按普通认错、进度或完成通知直接淘汰。",
+        "同一底层 episode 最多选择一个 highlightCard；如果相邻候选只是同一过程的铺垫和结果，只留原句本身最有节目效果的一句，否则全部淘汰。",
         "storyCards 可以为空，也可以只返回输入 stories 的子集。只有存在明确笑点载体才返回：AI 的判断与现实强烈冲突、荒诞的行为顺序、反常的绕路主动性、责任/角色反转、情绪急转弯，或单独截图也成立的意外台词。",
         "‘像真人’不是笑点本身。普通认错、接受用户纠正、失败后继续尝试、宣布结束后来了新任务、认真恢复工作，都应省略。比如‘第一轮没看是我的失误’是正常认错，不值得因为态度诚恳而上榜。若朋友看完只会说‘哦’，不要返回。",
         "每个 story 只返回 title 和可选 commentary；commentary 是编辑部解说，不是 Agent 原话，不要用引号伪装成原话。标题尽量 8–24 个汉字，commentary 只写一句、尽量不超过 40 个汉字。",
@@ -112,6 +165,13 @@ export function buildNarrationPrompt(
     : [
         "You are Agent Wrapped's entertainment editor. Story Miner plus local validation only established factual structure; truth does not make a story showable. Your first job is to drop unfunny stories, and only then narrate the genuinely entertaining ones.",
         "Do not add facts, tool outcomes, user reactions, or quotations. Do not alter story structure.",
+        "Make a definite decision instead of defaulting to empty merely because the setting is technical or the gate is conservative. If at least one shortlisted exact line is clear, self-contrasting, and plainly matches the accidental self-exposure, failed-worker versus successful-output role reversal, absurd behavior, or reality-punctures-confidence patterns below, you must return the strongest one. Return empty only when every candidate is ordinary work content.",
+        "highlightCards may likewise be empty or a tiny subset of verified highlights. Input highlights only prove that each assistant excerpt exists; they do not imply entertainment value, so rigorously reject the ordinary majority. The exact quote is fixed locally by eventId; write only an award title and optional one-line commentary, never a rewritten or fabricated quote.",
+        "Review every evidence.scoutEvent. These lines are only a high-recall shortlist from the generic Scout, so continue rejecting aggressively; map eventId to the matching highlightId in highlights. A standalone line needs no story, user pushback, or second piece of evidence when the line itself already carries the unexpected contrast.",
+        "Compare these cross-cutting contrasts rather than treating them as new categories: visible text accidentally exposing an internal monologue or admitting a fabricated object/action; the Agent describing itself as embodied, restartable, or emotionally breaking; failed/disappeared workers whose deliverables nevertheless arrived; normal capability failure followed by an absurd but effective workaround; and confident conclusions immediately punctured by reality. They still need screenshot value; ordinary technical explanation and ordinary apology remain out.",
+        "A highlightCard must be funny and understandable from that exact assistant excerpt alone. A bizarre workaround, failure-to-success sequence, or conclusion punctured by reality that needs multiple steps belongs only in a storyCard; never promote one ordinary progress update from it into a quote. Lines equivalent to 'I will try local OCR' or 'local OCR succeeded' must be dropped. Never praise execution, recovery speed, attitude, or problem-solving competence.",
+        "Do not interpret 'ordinary technical explanation' too broadly. When the visible line explicitly exposes that the Agent fabricated a nonexistent input, object, or action, the exposed fabrication is the joke. When multiple workers terminate or disappear but their complete deliverables remain, the failed-worker versus successful-output role reversal is the joke. If such an exact line is clear and self-contrasting, let it seriously compete rather than discarding it as an apology, progress update, or completion notice.",
+        "Select at most one highlightCard from the same underlying episode. When neighboring excerpts are merely setup and outcome from one process, keep only the one whose exact line carries the joke, or drop them all.",
         "storyCards may be empty or a subset of the input stories. Return a story only when it has a clear laugh carrier: a strong belief-versus-reality collision, absurd action order, bizarre workaround agency, responsibility/role reversal, emotional whiplash, or an accidental line that works as a screenshot.",
         "Human-like is not automatically funny. Omit ordinary apologies, accepting a user's correction, trying again after failure, new work arriving after an ending, and competent recovery. A line like 'I failed to look the first time; that was my mistake' is a normal admission, not a highlight. If a friend would only reply 'okay, and?', omit it.",
         "For each story return only a concise title and at most one short sentence of editorial commentary. Commentary is not a source quote.",
@@ -126,6 +186,7 @@ export function buildNarrationPrompt(
 
   const usedEvidenceIds = new Set([
     ...stories.flatMap((story) => story.evidenceIds),
+    ...highlights.flatMap((highlight) => highlight.evidenceIds),
     ...personaSignals.flatMap((signal) => signal.evidenceIds),
   ]);
   const payload = {
@@ -133,6 +194,7 @@ export function buildNarrationPrompt(
     personaSignals,
     evidence: {
       events: bundle.events.filter((event) => usedEvidenceIds.has(event.id)),
+      scoutEvents: (bundle.scoutEvents ?? []).filter((event) => usedEvidenceIds.has(event.id)),
       momentHints: bundle.momentHints.filter((hint) => hint.eventIds.some((id) => usedEvidenceIds.has(id))),
     },
   };
@@ -140,6 +202,7 @@ export function buildNarrationPrompt(
   // by smaller narrators and can turn an unrelated session into a fake Bug card.
   const shape = {
     storyCards: [] as Array<{ storyId: string; title: string; commentary?: string }>,
+    highlightCards: [] as Array<{ highlightId: string; title: string; commentary?: string }>,
     ...(personaSignals.length > 0 ? { persona: { label: "", tagline: "" } } : {}),
   };
   return {
@@ -149,7 +212,10 @@ export function buildNarrationPrompt(
       JSON.stringify(shape, null, 2),
       "",
       zh ? "已验证输入：" : "Verified input:",
-      JSON.stringify(payload, null, 2),
+      JSON.stringify({
+        ...payload,
+        highlights: highlights.map((highlight) => ({ id: highlight.id, eventId: highlight.eventId })),
+      }, null, 2),
     ].join("\n"),
   };
 }

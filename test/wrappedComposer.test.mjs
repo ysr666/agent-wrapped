@@ -372,6 +372,85 @@ test("Wrapped Composer does not force filler cards or an unsupported persona", (
   assert.ok(composed.diagnostics.suppressed.some((entry) => entry.reason === "weak-persona"));
 });
 
+test("Wrapped Composer publishes only editor-kept grounded highlights and uses local quote text", () => {
+  const session = {
+    id: "scout-highlight",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [{ role: "assistant", host: "dsh", text: "我已重启自己。" }],
+    events: [{ id: "line", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "我已重启自己。" }],
+  };
+  const highlight = {
+    id: "highlight:0",
+    eventId: "event:line",
+    contextIds: [],
+    evidenceIds: ["event:line"],
+    confidence: "high",
+  };
+  const evidence = {
+    ...semanticEvidence(session.id, []),
+    scoutEvents: [{ id: "event:line", order: 0, actor: "assistant", kind: "assistant_text", text: "我已重启自己。" }],
+  };
+  const kept = composeWrappedCards(session, awardReport(), semanticReport(session.id, [], {
+    highlights: [highlight],
+    narration: {
+      storyCards: [],
+      highlightCards: [{ highlightId: "highlight:0", title: "服务器没动，它先重启了自己", commentary: "主语突然有了肉身。" }],
+    },
+  }), evidence);
+  assert.equal(kept.cards.length, 1);
+  assert.equal(kept.cards[0].type, "highlight");
+  assert.equal(kept.cards[0].quote, "我已重启自己。");
+
+  const dropped = composeWrappedCards(session, awardReport(), semanticReport(session.id, [], {
+    highlights: [highlight],
+    narration: { storyCards: [], highlightCards: [] },
+  }), evidence);
+  assert.equal(dropped.cards.length, 0);
+  assert.ok(dropped.diagnostics.suppressed.some((entry) => entry.id === "card:highlight:highlight:0" && entry.reason === "narrator-dropped"));
+});
+
+test("Wrapped Composer keeps one canonical highlight from an overlapping episode", () => {
+  const session = {
+    id: "overlapping-highlights",
+    host: "dsh",
+    source: { host: "dsh", encoding: "jsonl" },
+    diagnostics: [],
+    messages: [
+      { role: "assistant", host: "dsh", text: "我先重启自己。" },
+      { role: "assistant", host: "dsh", text: "我又活了。" },
+    ],
+    events: [
+      { id: "first", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, messageIndex: 0, text: "我先重启自己。" },
+      { id: "second", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, messageIndex: 1, text: "我又活了。" },
+    ],
+  };
+  const highlights = [
+    { id: "highlight:0", eventId: "event:first", contextIds: ["event:second"], evidenceIds: ["event:first", "event:second"], confidence: "high" },
+    { id: "highlight:1", eventId: "event:second", contextIds: ["event:first"], evidenceIds: ["event:second", "event:first"], confidence: "high" },
+  ];
+  const evidence = {
+    ...semanticEvidence(session.id, []),
+    scoutEvents: [
+      { id: "event:first", sourceEventId: "event:first", order: 0, actor: "assistant", kind: "assistant_text", text: "我先重启自己。" },
+      { id: "event:second", sourceEventId: "event:second", order: 1, actor: "assistant", kind: "assistant_text", text: "我又活了。" },
+    ],
+  };
+  const report = composeWrappedCards(session, awardReport(), semanticReport(session.id, [], {
+    highlights,
+    narration: {
+      storyCards: [],
+      highlightCards: highlights.map((highlight, index) => ({ highlightId: highlight.id, title: `标题 ${index}` })),
+    },
+  }), evidence);
+
+  assert.equal(report.cards.length, 1);
+  assert.ok(report.diagnostics.suppressed.some((entry) =>
+    entry.id === "card:highlight:highlight:1" && entry.reason === "cross-route-duplicate"
+  ));
+});
+
 test("Wrapped Composer drops ordinary admission even when narration dresses it up", () => {
   const session = {
     id: "clean-final-show",

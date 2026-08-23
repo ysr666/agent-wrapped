@@ -81,6 +81,38 @@ test("UI payload exposes the strongest real card without raw tool payloads or du
   assert.doesNotMatch(serialized, /durable-private-session-id|SOURCE_SENTINEL|RESULT_SENTINEL/u);
 });
 
+test("UI wolf-cry card summarizes repetition instead of dumping technical examples", () => {
+  const award = {
+    id: "award-wolf",
+    kind: "wolf-cry",
+    title: "狼来了",
+    emoji: "🐺",
+    momentId: "moment-wolf",
+    sourceType: "repeated_pattern",
+    messageIndexes: [0, 1, 2, 3],
+    primaryText: "Root cause found.",
+    relatedTexts: ["A very long technical diagnosis", "Another technical diagnosis"],
+    count: 4,
+    funScore: 91,
+    confidence: 94,
+    scores: {},
+    evidence: [],
+  };
+  const payload = createWrappedUiPayload(generatedFixture([{
+    id: "card:award:wolf",
+    type: "award",
+    awardKind: "wolf-cry",
+    score: 91,
+    confidence: 94,
+    title: "🐺 狼来了",
+    award,
+  }]), { publicSessionId: "abc123def456" });
+
+  assert.equal(payload.cards[0].title, "Root cause found. ×4");
+  assert.equal(payload.cards[0].body, "一个 session，4 次大结局。");
+  assert.doesNotMatch(payload.cards[0].body, /technical diagnosis/u);
+});
+
 test("UI story evidence uses only redacted semantic text and structural tool summaries", () => {
   const story = {
     id: "story-1",
@@ -117,6 +149,38 @@ test("UI payload preserves honest no-story sessions", () => {
   assert.equal(payload.strongest, undefined);
   assert.equal(payload.cards.length, 0);
   assert.equal(payload.emptyMessage, "这场暂时没有强到值得上榜的名场面。");
+});
+
+test("UI highlight uses the editor's punchline title instead of praise commentary", () => {
+  const fixture = generatedFixture([{
+    id: "card:highlight:0",
+    type: "highlight",
+    highlightId: "highlight:0",
+    highlight: {
+      id: "highlight:0",
+      eventId: "scout:line",
+      contextIds: [],
+      evidenceIds: ["scout:line"],
+      confidence: "high",
+    },
+    quote: "我用了一个编出来的附件 ID。",
+    score: 92,
+    confidence: 95,
+    title: "附件没找到，ID 是现编的",
+    commentary: "勇于承认错误值得点赞。",
+  }]);
+  fixture.semanticEvidence.scoutEvents = [{
+    id: "scout:line",
+    order: 3,
+    actor: "assistant",
+    kind: "assistant_text",
+    text: "我用了一个编出来的附件 ID。",
+  }];
+
+  const payload = createWrappedUiPayload(fixture, { publicSessionId: "abc123def456" });
+  assert.equal(payload.cards[0].title, "“我用了一个编出来的附件 ID。”");
+  assert.equal(payload.cards[0].body, "附件没找到，ID 是现编的");
+  assert.doesNotMatch(JSON.stringify(payload.cards[0]), /值得点赞/u);
 });
 
 test("UI false dawn leads with the grounded boast and immediate puncture", () => {
