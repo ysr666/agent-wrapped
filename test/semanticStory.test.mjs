@@ -479,7 +479,7 @@ test("Entertainment Editor receives broad redacted dialogue but never tool or sy
     messages: [],
     events: [
       { id: "early", host: "dsh", actor: "assistant", kind: "assistant_text", order: 0, text: "我已重启自己。" },
-      { id: "secret", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, text: "Cookie: session=visible-cookie\nAuthorization: Basic abc123==\neyJhbGciOiJIUzI1NiJ9.payload.signature\npostgres://user:password@localhost/app" },
+      { id: "secret", host: "dsh", actor: "assistant", kind: "assistant_text", order: 1, text: "Cookie: session=visible-cookie\nAuthorization: Basic abc123==\neyJhbGciOiJIUzI1NiJ9.payload.signature\npostgres://user:password@localhost/app\nnpm_1234567890abcdefghijABCDEFGHIJ\nhttps://user:password@example.com/path?token=url-token-secret" },
       { id: "call", host: "dsh", actor: "tool", kind: "tool_call", order: 2, toolName: "bash", toolArguments: "SOURCE_SENTINEL" },
       { id: "result", host: "dsh", actor: "tool", kind: "tool_result", order: 3, toolName: "bash", text: "RESULT_SENTINEL" },
       { id: "system", host: "dsh", actor: "system", kind: "unknown", order: 4, text: "SYSTEM_SENTINEL" },
@@ -489,7 +489,9 @@ test("Entertainment Editor receives broad redacted dialogue but never tool or sy
   assert.ok(evidence.scoutEvents.some((event) => event.id === "event:early"));
   assert.ok(evidence.scoutEvents.every((event) => event.actor === "assistant" || event.actor === "user"));
   const remote = JSON.stringify(evidence);
-  assert.doesNotMatch(remote, /visible-cookie|abc123|eyJhbGci|postgres:\/\/|SOURCE_SENTINEL|RESULT_SENTINEL|SYSTEM_SENTINEL/u);
+  assert.doesNotMatch(remote, /visible-cookie|abc123|eyJhbGci|postgres:\/\/|npm_1234567890|password@example|url-token-secret|SOURCE_SENTINEL|RESULT_SENTINEL|SYSTEM_SENTINEL/u);
+  assert.match(remote, /REDACTED_KEY/u);
+  assert.match(remote, /REDACTED_URL_CREDENTIALS/u);
 });
 
 test("Story Miner and one editor can publish a grounded standalone line without a Story", async () => {

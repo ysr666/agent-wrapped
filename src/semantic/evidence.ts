@@ -113,9 +113,12 @@ export function redactSemanticText(input: string): { text: string; redactions: n
   replace(/-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/gu, "[REDACTED_PRIVATE_KEY]");
   replace(/-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----/gu, "[REDACTED_PRIVATE_KEY]");
   replace(/\bgithub_pat_[A-Za-z0-9_]{6,}\b/gu, "[REDACTED_KEY]");
+  replace(/\bnpm_[A-Za-z0-9]{20,}\b/gu, "[REDACTED_KEY]");
   replace(/\b(?:postgres(?:ql)?|mysql):\/\/[^\s"'<>]+/giu, "[REDACTED_CONNECTION_STRING]");
   replace(/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|AIza[0-9A-Za-z_-]{20,})\b/gu, "[REDACTED_KEY]");
-  replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|secret)\b\s*[:=]\s*["']?([^\s"',;]{6,})/giu, (_match, key) => `${key}=[REDACTED]`);
+  replace(/\b((?:https?|wss?):\/\/)[^/\s:@]+:[^@/\s]+@/giu, (_match, scheme) => `${scheme}[REDACTED_URL_CREDENTIALS]@`);
+  replace(/([?&](?:access[_-]?token|api[_-]?key|auth|key|secret|token)=)[^&#\s"']+/giu, (_match, prefix) => `${prefix}[REDACTED]`);
+  replace(/\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|token|auth(?:orization)?|password|passwd|secret))\b\s*[:=]\s*["']?([^\s"',;]{6,})/giu, (_match, key) => `${key}=[REDACTED]`);
   replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[REDACTED_EMAIL]");
   replace(/\/Users\/[^/\s]+\//gu, "/Users/[USER]/");
   replace(/\/home\/[^/\s]+\//gu, "/home/[USER]/");
